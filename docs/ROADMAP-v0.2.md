@@ -1,85 +1,98 @@
-# v0.2 Upgrade Proposal — Autonomous Dreaming & Policy Expressiveness
+# v0.2 Upgrade Proposal (rev 2) — Paper-Faithful Core
 
-**Status:** PROPOSAL · **Target:** v0.2.0 · **Evidence base:** two live campaigns (circle-packing, 14 rounds, 2 policy redeployments, 33+ discovery nodes)
-
-## Why these four features (evidence, not vibes)
-
-1. **Dreaming fired only at round boundaries, on K=3–4 candidates.** The paper's offline phase iterates revisions against the simulator over a *massive* candidate pool (thousands of evaluations). Our RSI layer was ~idle during campaign 2's breakthrough — all learning happened within-round, where the plugin is deliberately hands-off.
-2. **The policy layer cannot hold what the agent learns.** Campaign 2's champion technique (RNG stream-state replication) lived in `program.py` — inexpressible in the DSL. The agent's ideas die at the policy boundary.
-3. **The RCO extension is load-bearing but uncalibrated.** In the historic `d0004` redeployment, RCO estimates made up 40–50% of some worlds' reveals and the winning margin was **0.00114**. Estimates already decide policy changes; their trustworthiness should be measured, not assumed.
-4. **Context wipes lose the interpretive layer.** A fresh agent gets records + digest; the distilled "why" survives only if the digest is rich enough. Campaign 2 started from a cold context and still broke the plateau — richer digest makes that the default, not the exception.
-
-All features are **opt-in with byte-identical defaults**: `autoDream: off`, `dreamJudge: off`, pool generator only on request. v0.1.1 behavior is preserved exactly unless configured.
+**Status:** PROPOSAL (rev 2 — supersedes the rev-1 compromise draft) · **Target:** v0.2.0
+**Directive:** match the paper's architecture — code policies, LLM policy development inside the loop, strictly on-manifold replay, dreaming as a mandatory cycle stage, pool at paper scale.
 
 ---
 
-## Feature 1 — Autonomous dreaming at scale
+## What rev 2 changes vs the rev-1 draft, and why
 
-**1.1 Auto-dream triggers.** `autoDream: 'off' | 'on-stagnation' | 'every-round'` (default `off`). The engine already tracks best-score progression per round; when `on-stagnation` and N consecutive decision rounds produce no improvement, `end_round` runs the dream loop automatically and the result rides on the `end_round` response. `every-round` dreams after every closed round. `log_decision`/`end_round` responses also carry `suggestDream: true` + reason (passive signal, even when `off`).
-
-**1.2 Candidate-pool generator (no LLM).** `dreamPoolSize` (default 24, cap 200): a deterministic perturbation generator expands the incumbent (plus optional seed DSLs) across a bounded grid — W ∈ {1..maxBatch}, β ∈ {0.2..0.8}, portfolio shares, `closeAfterConsecutiveFailures`, `stagnationRounds` — diversity-gated through the existing similarity machinery so near-duplicates are dropped. This is how we reach the paper's "thousands of replay evaluations per cycle": the DSL's bounded vocabulary makes systematic coverage *possible without an LLM*.
-
-**1.3 Refine mode.** `dreamrsi_dream({ refine: { baseVersion, focus: 'explore' | 'exploit' | 'repair' } })` — perturb around a named base version with a focus bias, instead of always the incumbent.
-
-**1.4 Trajectory-level reports.** Per candidate, per world: a compact step digest (batch compositions, reveal ids, per-step term values, stop reason) — capped at the first 20 steps per world so reports stay model-readable. This gives the host agent what the paper's Listing 2 policy-development agent sees.
-
-## Feature 2 — DSL v2 (expressiveness, still declarative)
-
-**2.1 `strategies[]`.** Named direction descriptors `{ id, mechanism, tags, prior }` with weights: a policy can *inject novel directions* ("open a branch targeting mechanism X") even when X has no recorded nodes. Off-manifold strategies flow to the estimator path (RCO, or judgment when Feature 3 is on) instead of silently zeroing out.
-
-**2.2 `branchBudgets`.** Per-branch decision-round allocation — campaign 2's winning policy wanted exactly this ("deep chains on the champion, starve the rest").
-
-**2.3 Conditional rules.** An enumerable `condition → action` list (`onStagnation: 'shake' | 'prune' | 'reopen'`, `onNewBest: 'exploit' | 'continue'`). Still declarative, validated, deterministic.
-
-**2.4 Explicit non-goal for v0.2:** script policies. Sandboxed arbitrary code is a v0.3 decision (sandbox surface, security review); declarative coverage comes first.
-
-## Feature 3 — Judgment mode (LLM-judged RCO)
-
-Reliability engineering for the load-bearing estimator — *not* paper fidelity (the paper's replay is strictly on-manifold; RCO is our extension).
-
-**3.1 Modes.** `dreamJudge: 'off' | 'agent-relay' | 'host-llm'` (default `off`).
-
-**3.2 Trigger discipline.** Judge only when: RCO confidence < medium **and** `sMax < similarityFloor` (genuinely off-manifold) **and** the decision point is top-M by replay impact **and** the per-run budget (`dreamJudgeMaxCalls`) has headroom **and** the judgment cache misses.
-
-**3.3 Anti-hallucination.** Anchored prompt (decision context + action descriptor + K similar recorded outcomes with their scores + the context's score scale); conservative instruction; **hard cap: a judged score may not exceed the max recorded outcome in that context**; `medium`+ confidence enters the Eq. 1 quality term, `low` falls back to the abstention prior; `judgedFraction` logged beside `estOutcomeFraction`.
-
-**3.4 Cache + calibration.** Judgments persist to `.dreamrsi/judgments.jsonl`, keyed by context+action hash. Online rounds grade the judge for free (predicted vs. realized on redeployed actions); drift auto-falls the mode back to RCO. Determinism: same inputs + same cache state → same report; the cache is store-versioned and auditable.
-
-**3.5 New tools.** `dreamrsi_judgment_submit` + `dreamrsi_judgment_list` (the `agent-relay` two-phase flow: dream returns `judgmentRequests[]`, the agent submits verdicts, subsequent dreams consume the cache). `host-llm` mode resolves the harness `llm` service via `ctx.get('llm')`, fail-soft to RCO.
-
-## Feature 4 — Distilled memory (context-wipe insurance)
-
-**4.1 `historyDigest` v2.** Adds per-mechanism score stats, failClass distribution, stagnation diagnostics, and (when Feature 3 is on) judgment calibration summary — handed to every fresh agent on `begin_round`.
-
-**4.2 Note-discipline warning.** `dreamrsi_log_decision` warns when `notes` are thin, mirroring the workspace-fallback warning — the notes/tags fields are the persistence layer for *why*, and thin notes are how lessons die at context wipes.
+| Rev-1 (compromise) | Rev 2 (paper-faithful) | Paper source |
+|---|---|---|
+| JSON DSL stays primary; DSL v2 adds knobs | **Code policies replace the DSL** as the primary representation | `OptimalPolicy.solve`, Appendix B Listings 1–2 |
+| Pool generated by deterministic DSL perturbation (no LLM) | **LLM policy-development loop**: the framework calls the configured LLM with the verbatim Listing 2 prompt, fed replay trajectories, to generate the candidate pool | §3 "Dreaming-based policy improvement"; Listing 2 |
+| RCO estimator always on for novel actions | **Strictly on-manifold replay by default**; RCO becomes opt-in (`estimate: 'off' \| 'rco'`, default `off`) | §3 "Replay reveals recorded outcomes only" |
+| Dreaming when the agent chooses (autoDream off) | **Dreaming is a mandatory stage of every cycle** (`autoDream: 'every-cycle'` default) — the outer iteration always includes improvement | §3 overview; Fig. 1 |
+| Judgment mode (LLM scores novel actions inside replay) | **Dropped from the core.** Imagination belongs in policy development, where the paper puts it. (May return later as a documented extension.) | §11 row 3 |
 
 ---
 
-## Compatibility, risks, mitigations
+## F1 — Code policies (`OptimalPolicy` as a subprocess)
 
-| Risk | Mitigation |
-|---|---|
-| Pool generator dilutes selection with near-duplicates | Diversity gate reuses the existing similarity machinery; min-distance threshold config-exposed |
-| Auto-dream cadence burns cycles | `on-stagnation` default-off; stagnation window config; dreams are deterministic + cached, so re-runs are cheap |
-| DSL v2 grows validation surface | Fence tests extended to every new field; invalid combinations rejected at validation time (proven pattern) |
-| Judgment optimism flips a selection | Context-max cap + strict-win margin + `judgedFraction` visibility + calibration auto-fallback |
-| Byte-determinism regression | Hard invariant: with all new features at defaults, dream outputs are identical to v0.1.1 — pinned by test |
+**The policy is a Python module.** Interface mirrors the paper's shared decision interface:
 
-## Test plan highlights
+```python
+# policy module contract (v0.2)
+def solve(view: dict) -> dict:
+    """
+    view: { roundId, decisionRound, limits: {maxRounds K1, maxParallelism W},
+            selectable: [node summaries — root + current leaves, with state,
+                         action history, scores, deltas, sibling counts],
+            history: { rounds, totalNodes, bestScoreOverall, bestMechanisms,
+                       knownDeadEnds, score scale } }
+    returns: { batch: [nodeId, ...] (<= W, legal), stop: bool, notes: str }
+    """
+```
 
-- Byte-determinism: v0.2 defaults vs v0.1.1 outputs on the live circle-packing store fixtures
-- Pool generator: coverage + diversity-gate assertions; replay determinism across pool sizes
-- Auto-dream: stagnation trigger fires exactly once per condition; `off` never fires
-- DSL v2: per-field validation fences; `strategies[]` → estimator path integration
-- Judgment: cache round-trip, budget enforcement, context-max cap, relay two-phase flow, calibration query, `off`-mode identity
+- **Execution:** one subprocess per policy per dream run (`python -I`, isolated interpreter); the replay engine drives a JSON-lines decision protocol over stdin/stdout — engine sends the tree view each decision round, policy returns the batch; the engine reveals recorded children per the paper's `Child()` rules. O(1) spawns per policy, all worlds inside one process — thousands of episodes stay tractable.
+- **Sandbox:** per-episode timeout, isolated mode, no harness state on the wire. Trust posture follows the preset model (policy code authored by the configured LLM is trusted configuration — the same trust that already justifies preset compositions). Documented residual risk: no hard filesystem/network confinement on Windows; `landlock-run` where available.
+- **Bootstrap:** the plugin ships a built-in default code policy (ports v0001 `bootstrap-balanced` semantics) so every fresh store starts paper-shaped.
+- **DSL retirement:** existing DSL policies keep replaying under a `legacy` interpreter (config `policyEngine: 'code' | 'legacy'`, default `code` for new stores). Migration: a DSL → auto-generated equivalent code policy, one-time per store.
+
+## F2 — LLM policy-development loop (Listing 2, inside the framework)
+
+- **Primary mode (paper-faithful):** after `end_round`, the framework calls the configured LLM with the **verbatim Listing 2 replay-based policy improvement prompt**. Payload: compact **trajectory digests** per world (batch compositions, reveal sequences, stop reasons, per-step term values), score stats, and the incumbent policy's source code.
+- **Output:** `poolSize` candidate policies (code) — default **32**, config to 1000+ for plateau campaigns. Each candidate is versioned (`vNNNN.py`, lineage recorded), replayed against **all** worlds, Eq. 1-scored, argmax-selected with the incumbent as candidate 0 (no-regression, earliest-tie — unchanged).
+- **Budget & failure:** LLM calls per cycle configurable; malformed candidates are skipped and logged; generation failures degrade to keeping the incumbent (never a crash).
+- **Fallback mode:** `devLoop: 'host-llm' | 'agent-relay'` — without an `llm` service, the host agent receives the Listing 2 payload + trajectory digests and submits candidates via `dreamrsi_policy_set` (the existing flow, now trajectory-fed). Relay is the DSH-native adaptation; host-llm is the paper shape.
+
+## F3 — Strictly on-manifold replay by default
+
+- `estimate: 'off' | 'rco'` (default **`off`**). Off = recorded reveals only; empty-reveal → episode exhaustion (quality 0, unchanged); illegal batches → −∞ (unchanged). All §5.3 RCO tests move behind the opt-in mode.
+- Rationale: the paper avoids novel actions by construction. Keeping RCO available preserves our superset for deployments that want imagination in replay; it is no longer the default path, and its calibration caveats are documented as extension caveats.
+
+## F4 — Cycle shape and scale
+
+- `autoDream` default: **`every-cycle`** — the outer iteration always runs improvement (paper Fig. 1).
+- Replay performance: batched subprocess protocol (F1) measured before any default raise; target: poolSize 32 × 10 worlds in under a few minutes on a laptop.
+- Trajectory digests: compact, capped (first N steps per world + summary), consumed by F2's prompt payload and returned in dream reports for the human/agent.
+- K₁ / K₂ / W / Eq. 1 semantics unchanged.
+
+---
+
+## Compatibility
+
+- Existing stores: DSL policies replay under `legacy`; new cycles generate code policies; `activeVersion` pointers preserved.
+- Determinism invariant (restated for code policies): same store + same policy code + same candidate pool → identical replay results. LLM nondeterminism is confined to candidate **generation** — exactly as in the paper.
+- The judgment mode, RCO-as-default, and the DSL-as-primary are all superseded; legacy paths remain behind config.
+
+## Test plan
+
+- Decision-protocol conformance (engine ↔ subprocess contract, timeouts, malformed-policy handling)
+- On-manifold identity: `estimate: 'off'` replays byte-identical to the paper semantics on the live circle-packing store fixtures
+- Selection invariants on code policies: no-regression, earliest-tie, degenerate detection computed from replay behavior (never-batched / single-branch / stops-immediately)
+- Listing 2 payload shape (trajectory digests complete, verbatim prompt template)
+- Sandbox: timeout kills, isolated interpreter, malformed output
+- Scale gate: poolSize 32 × 10 worlds performance budget
 
 ## Live validation bench
 
-The circle-packing store (8–10 worlds by then) contains a **known novel action with a known true online outcome** (corrected-gradient L-BFGS-B on centers, realized 0.9857). Before enabling `host-llm` anywhere, we measure: does agent-judged dreaming *predict* that outcome? Calibration report first, enablement second.
+The circle-packing store (9–10 worlds by then) holds the campaign's full trajectory — including the sign-bug discovery. Regression scenario: fed the trajectory digest, does the policy-development LLM propose candidates that the replay ranks above the incumbent *for the right reason* (deeper chains on the champion)? The store is the acceptance bench.
+
+## Risks
+
+| Risk | Mitigation |
+|---|---|
+| Executing LLM-authored code | Trusted-config model (same as presets), isolated subprocess, timeouts, no harness state on the wire; residual risk documented |
+| LLM cost per cycle | Calls-per-cycle budget, poolSize config, relay fallback, candidate skip-and-log |
+| Replay perf at pool scale | One subprocess per policy (all worlds inside); measured gate before default raise |
+| DSL deprecation for existing stores | `legacy` interpreter + one-time migration path |
+| LLM proposes broken policies | Validation + skip-and-log; incumbent retained; never a crashed cycle |
 
 ## Implementation split
 
-- **F1 + F4** (engine-side): auto-dream triggers, pool generator, trajectory reports, digest v2 — one engineer
-- **F2** (DSL v2): types, validation fence, interpreter extensions — same or second engineer
-- **F3** (judgment): store cache, tools, relay flow, host-llm probe — after the F1 cache lands (shared `judgments.jsonl`)
-- **QA**: byte-determinism fence first, then per-feature fences; live-store calibration report as the acceptance gate for F3 enablement
+- **F1** protocol + sandbox + bootstrap code policy (engineer)
+- **F2** Listing 2 loop + trajectory digests + llm-surface check (engineer, with `docs/subsystems/llm-streaming.md`)
+- **F3** small: estimator default flip + test relocation (QA)
+- **F4** perf gate + digest capping (engineer)
+- **QA**: protocol conformance, on-manifold identity, selection invariants on code policies, scale gate

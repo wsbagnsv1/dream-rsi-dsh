@@ -81,6 +81,21 @@ export interface PluginConfig {
    * terminated (`abort` + `terminate`) and marked invalid.
    */
   policyEpisodeTimeoutMs: number
+  /**
+   * Policy-development loop (v0.2 F2). `'agent-relay'` (default) keeps the
+   * DSH-native adaptation: the dream report carries trajectory digests and
+   * the HOST AGENT authors + commits candidates via `dreamrsi_policy_set`.
+   * `'host-llm'` is the paper shape: the framework itself calls the
+   * configured LLM with the verbatim Listing 2 prompt, parses `poolSize`
+   * candidate code policies from the response, and feeds them to the dream.
+   */
+  devLoop: 'host-llm' | 'agent-relay'
+  /** Candidate pool size for the host-llm development loop (default 32). */
+  poolSize: number
+  /** Maximum LLM calls per dreaming cycle (host-llm loop; default 3). */
+  maxLlmCallsPerCycle: number
+  /** Explicit LLM route override; unset → first registered provider + its first listed model. */
+  llmRoute?: { provider: string; model: string }
 }
 
 /** Schema defaults, kept in one place so `index.ts` and docs stay in sync. */
@@ -103,6 +118,9 @@ export const DEFAULT_CONFIG: Omit<PluginConfig, 'dataDir'> & { dataDir: string }
   autoDream: 'every-cycle',
   trajectoryCap: 20,
   policyEpisodeTimeoutMs: 30000,
+  devLoop: 'agent-relay',
+  poolSize: 32,
+  maxLlmCallsPerCycle: 3,
 }
 
 // ---------------------------------------------------------------------------

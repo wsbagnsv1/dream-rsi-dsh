@@ -137,6 +137,13 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Managed subprocess seam (the `subprocess` service; inject to require it). */
     subprocess: SubprocessRuntime
+    /**
+     * LLM adapter registry + streaming model-call API (optional service;
+     * resolve with fail-soft `ctx.get('llm')`). The full surface mirrors
+     * docs/subsystems/llm-streaming.md — see `LlmRuntime` in
+     * src/policy-runtime.ts for the structural mirror the dev loop uses.
+     */
+    llm: import('./policy-runtime.ts').LlmRuntime
   }
 }
 

@@ -19,6 +19,44 @@
 
 import type { PolicyDecision, PolicyView } from './types.ts'
 
+/**
+ * Minimal structural mirror of the harness `ctx.llm` service surface the
+ * v0.2 F2 development loop uses (docs/subsystems/llm-streaming.md):
+ *
+ * - **One-shot call shape:** `stream(options)` takes a fully-assembled
+ *   request — `provider` (a registered adapter route) + `model` select the
+ *   adapter; one-shot callers pass `system` text and/or `messages`; optional
+ *   `temperature/maxTokens/stop/signal`.
+ * - **Stream collection:** the answer is an `AsyncIterable<StreamChunk>`;
+ *   visible text arrives as `text-delta` chunks (join in arrival order);
+ *   `finish { kind: 'error' | 'aborted' }` carries the `LlmFailure`.
+ * - **Route resolution:** adapters register provider routes;
+ *   `listProviders()` / `listModels(provider)` are the advisory catalogs —
+ *   the dev loop uses an explicit configured route when given, else the
+ *   first registered provider + its first listed model (the deployment
+ *   default route as surfaced by the registry).
+ */
+export interface LlmRuntime {
+  stream(options: {
+    provider: string
+    model: string
+    messages?: readonly { role: string; content: string }[]
+    system?: string | undefined
+    temperature?: number | undefined
+    maxTokens?: number | undefined
+    stop?: readonly string[] | undefined
+    signal?: AbortSignal | undefined
+  }): AsyncIterable<{
+    type: 'block-start' | 'reasoning-delta' | 'tool-call-delta' | 'block-end' | 'usage'
+      | 'finish'
+    text?: string
+    reason?: { kind: string; failure?: { message: string; code: string } }
+    index?: number
+  } | { type: 'text-delta'; index: number; text: string }>
+  listProviders(): { name: string }[]
+  listModels(provider: string): { provider: string; model: string }[]
+}
+
 /** The slice of the `ctx.subprocess` seam the policy runtime needs. */
 export interface SubprocessService {
   spawn(spec: {

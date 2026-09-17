@@ -7,6 +7,12 @@
  * tools from the spec's §7 tool surface. Tool registration is effect-based —
  * disposing the plugin fiber unregisters everything.
  *
+ * v0.2 (paper-faithful core): policies are CODE by default — Python modules
+ * exposing `solve(view)`, executed through `ctx.subprocess` (`python -I`,
+ * JSON-lines decision protocol, per-episode timeout with abort + terminate).
+ * The v0.1 JSON DSL interpreter is retained behind `policyEngine: 'legacy'`,
+ * and dreaming runs as a mandatory cycle stage (`autoDream: 'every-cycle'`).
+ *
  * @module @dreamrsi/plugin-dream-rsi
  */
 
@@ -18,9 +24,11 @@ import { DEFAULT_CONFIG, type PluginConfig } from './types.ts'
 
 export type * from './types.ts'
 export { DreamEngine, EngineError } from './engine.ts'
-export { DreamStore, StoreError } from './store.ts'
+export { DreamStore, StoreError, runnerPathOf, policySourcePathOf, RUNNER_FILE_NAME } from './store.ts'
 export { buildToolDefinitions, DREAMRSI_TOOLS } from './tools.ts'
-export { defaultPolicyDsl, INVALID_SCORE, runDream, validatePolicyDsl } from './dreaming.ts'
+export { defaultPolicyDsl, INVALID_SCORE, runDream, validatePolicyDsl, buildPolicyView } from './dreaming.ts'
+export { BOOTSTRAP_POLICY_SOURCE, PYTHON_RUNNER_SOURCE } from './bootstrap-policy.ts'
+export { startPolicyProcess } from './policy-runtime.ts'
 export {
   batchDiversity,
   buildCorpus,
@@ -40,8 +48,13 @@ export {
 /** Cordis function-plugin name. */
 export const name = 'dream-rsi'
 
-/** Services required before `apply` runs; the tool registry must be ready. */
-export const inject = ['tools']
+/**
+ * Services required before `apply` runs: the tool registry, and — v0.2 F1 —
+ * the subprocess seam that executes code policies (`python -I` JSON-lines
+ * decision protocol). Both are host-plane services; preset rows resolve them
+ * without a realm.
+ */
+export const inject = ['tools', 'subprocess']
 
 /**
  * Schemastery schema validating the plugin's `config` block in cordis.yml.
@@ -63,6 +76,10 @@ export const Config: Schema<PluginConfig> = Schema.object({
   noveltyLambda: Schema.number().default(DEFAULT_CONFIG.noveltyLambda),
   confidenceMediumTau: Schema.number().default(DEFAULT_CONFIG.confidenceMediumTau),
   similarityGamma: Schema.number().default(DEFAULT_CONFIG.similarityGamma),
+  policyEngine: Schema.union(['code', 'legacy'] as const).default(DEFAULT_CONFIG.policyEngine),
+  autoDream: Schema.union(['every-cycle', 'on-stagnation', 'off'] as const).default(DEFAULT_CONFIG.autoDream),
+  trajectoryCap: Schema.number().default(DEFAULT_CONFIG.trajectoryCap),
+  policyEpisodeTimeoutMs: Schema.number().default(DEFAULT_CONFIG.policyEpisodeTimeoutMs),
 })
 
 /** Default workspace root when a tool call carries no session workspace. */
@@ -70,11 +87,15 @@ const FALLBACK_WORKSPACE_ROOT = process.cwd()
 
 /**
  * Plugin entry point. Called by Cordis with the validated config once every
- * injected service (here: `tools`) is ready.
+ * injected service (here: `tools` and `subprocess`) is ready.
  */
 export function apply(ctx: Context, config: PluginConfig): void {
   const logger = ctx.logger('dream-rsi')
-  const engine = new DreamEngine({ config, workspaceRoot: FALLBACK_WORKSPACE_ROOT })
+  const engine = new DreamEngine({
+    config,
+    workspaceRoot: FALLBACK_WORKSPACE_ROOT,
+    subprocess: ctx.subprocess,
+  })
 
   // Effect-based registration: disposing the plugin fiber unregisters the tools.
   for (const definition of buildToolDefinitions(engine)) {
@@ -88,6 +109,9 @@ export function apply(ctx: Context, config: PluginConfig): void {
       // agent's session workspace per tool call (process.cwd() only when a
       // call carries no session workspace). Nothing is created at mount.
       workspaceIsolation: 'per-session-workspace',
+      policyEngine: config.policyEngine,
+      autoDream: config.autoDream,
+      trajectoryCap: config.trajectoryCap,
       candidateCount: config.candidateCount,
       beta1: config.beta1,
       beta2: config.beta2,

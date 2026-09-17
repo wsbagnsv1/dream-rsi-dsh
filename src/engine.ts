@@ -17,9 +17,12 @@
  */
 
 import * as path from 'node:path'
-import { runDream, defaultPolicyDsl, validatePolicyDsl } from './dreaming.ts'
-import { buildWorld, type ReplayWorld } from './replay.ts'
-import { DreamStore, StoreError, type DreamStoreReport } from './store.ts'
+import { rm, writeFile } from 'node:fs/promises'
+import { BOOTSTRAP_POLICY_SOURCE } from './bootstrap-policy.ts'
+import { runDream, defaultPolicyDsl, validatePolicyDsl, type CodePolicyRuntime, type DreamCandidate } from './dreaming.ts'
+import { buildWorld, computeNormalization, type ReplayWorld } from './replay.ts'
+import { DreamStore, StoreError, runnerPathOf, type DreamStoreReport } from './store.ts'
+import type { SubprocessService } from './policy-runtime.ts'
 import type {
   BeginRoundResult,
   DecisionInput,
@@ -34,6 +37,31 @@ import type {
   PluginConfig,
   RoundRecord,
 } from './types.ts'
+
+/**
+ * Map one submitted dream candidate onto the v0.2 candidate union: a bare
+ * string is a CODE policy source, `{ code }` a named code policy, and an
+ * object carrying the DSL shape (`W` + `gridPlan`) a legacy DSL. Unknown
+ * shapes surface as invalid DSL candidates through validation.
+ */
+function toDreamCandidate(raw: unknown): DreamCandidate {
+  if (typeof raw === 'string') {
+    return { kind: 'code', code: raw, name: 'code-candidate', W: 4, version: null }
+  }
+  if (typeof raw === 'object' && raw !== null) {
+    const record = raw as Record<string, unknown>
+    if (typeof record['code'] === 'string') {
+      return {
+        kind: 'code',
+        code: record['code'],
+        name: typeof record['name'] === 'string' ? record['name'] : 'code-candidate',
+        W: typeof record['W'] === 'number' && Number.isInteger(record['W']) && record['W'] >= 1 ? record['W'] : 4,
+        version: null,
+      }
+    }
+  }
+  return { kind: 'dsl', dsl: raw as PolicyDsl, version: null }
+}
 
 /** Error surfaced to the model as a tool error (invalid input or state). */
 export class EngineError extends Error {
@@ -72,6 +100,11 @@ export interface DreamEngineOptions {
   workspaceRoot?: string
   /** Injectable clock (determinism in tests). */
   clock?: () => Date
+  /**
+   * The `ctx.subprocess` seam for v0.2 code policies. Optional (fail-soft):
+   * without it, code candidates replay as invalid while everything else works.
+   */
+  subprocess?: SubprocessService
 }
 
 /** Per-workspace engine state, memoized by resolved root. */
@@ -97,11 +130,13 @@ export class DreamEngine {
   private readonly config: PluginConfig
   private readonly defaultRoot: string
   private readonly clock: () => Date
+  private readonly subprocess: SubprocessService | undefined
   private readonly workspaces = new Map<string, WorkspaceState>()
 
   constructor(options: DreamEngineOptions) {
     this.config = options.config
     this.clock = options.clock ?? (() => new Date())
+    this.subprocess = options.subprocess
     this.defaultRoot = path.resolve(options.workspaceRoot ?? process.cwd())
     this.store = this.createStore(this.defaultRoot)
   }
@@ -159,7 +194,12 @@ export class DreamEngine {
     if (active === null) {
       const existing = await ws.store.listPolicyEntries()
       if (existing.length === 0) {
-        const record = await ws.store.registerPolicy(defaultPolicyDsl(this.config), 'bootstrap policy created by the plugin', null, 'candidate')
+        // v0.2 F1: `policyEngine: 'code'` (the paper-faithful default)
+        // bootstraps a CODE policy (solve(view) subprocess contract); the
+        // legacy JSON DSL bootstrap remains for `policyEngine: 'legacy'`.
+        const record = this.config.policyEngine === 'legacy'
+          ? await ws.store.registerPolicy(defaultPolicyDsl(this.config), 'bootstrap policy created by the plugin', null, 'candidate')
+          : await ws.store.registerCodePolicy(BOOTSTRAP_POLICY_SOURCE, 'bootstrap-balanced', 'bootstrap code policy created by the plugin (v0.2 paper-faithful default)', null, 'candidate')
         await ws.store.setActivePolicy(record.version, true)
       }
     }
@@ -186,17 +226,23 @@ export class DreamEngine {
     if (open) throw new EngineError(`round ${open.roundId} is still open; call dreamrsi_end_round first`)
     const active = await ws.store.getActivePolicy()
     if (!active) throw new EngineError('no active policy; register one with dreamrsi_policy_set')
-    const dsl = active.params
+    const kind = active.kind ?? 'dsl'
+    const parallelism = kind === 'code' ? active.W ?? 4 : active.params?.W ?? 4
     const round = await ws.store.createRound(active.version, {
       maxRounds: this.config.maxOnlineRounds,
-      maxParallelism: dsl.W,
+      maxParallelism: parallelism,
     })
     const digest = await this.historyDigest(ws)
     await ws.store.logEvent('dreamrsi_begin_round', {}, { roundId: round.roundId, policyVersion: active.version }, active.version)
     return {
       roundId: round.roundId,
       policyVersion: active.version,
-      policy: dsl,
+      policyKind: kind,
+      ...(kind === 'code'
+        ? { policySource: active.code ?? '' }
+        : active.params !== undefined
+          ? { policy: active.params }
+          : {}),
       limits: { maxRounds: round.limits.maxRounds, maxParallelism: round.limits.maxParallelism },
       historyDigest: digest,
       // Where this round's state lives: the resolved store directory, and how
@@ -269,18 +315,23 @@ export class DreamEngine {
   }
 
   /**
-   * Close the round and construct the replay world for the finished tree
-   * (spec §7.3).
+   * Close the round, construct the replay world for the finished tree
+   * (spec §7.3), and — per `config.autoDream` (v0.2 F4, default
+   * `'every-cycle'`) — run the dreaming stage automatically. Dreaming is a
+   * mandatory stage of every outer iteration in the paper; 'on-stagnation'
+   * runs it only when the round did not improve the best score overall, and
+   * 'off' keeps the v0.1 agent-driven shape.
    */
   async endRound(input: { roundId: string; summary?: string }, opts: WorkspaceOption = {}): Promise<EndRoundResult> {
     const ws = await this.workspaceReady(opts.workspaceRoot)
     const round = await ws.store.getRound(input.roundId)
     if (!round) throw new EngineError(`unknown round ${input.roundId}`)
     if (round.status === 'closed') throw new EngineError(`round ${input.roundId} is already closed`)
+    const previousBest = (await this.historyDigest(ws)).bestScoreOverall
     const closed = await ws.store.closeRound(input.roundId, input.summary)
     const world = await this.worldFor(ws, closed.roundId)
     await ws.store.logEvent('dreamrsi_end_round', { roundId: input.roundId }, { worldId: closed.roundId }, closed.policyVersion)
-    return {
+    const result: EndRoundResult = {
       roundStats: closed.stats,
       worldId: closed.roundId,
       simulator: {
@@ -290,6 +341,27 @@ export class DreamEngine {
       },
       activePolicyVersion: closed.policyVersion,
     }
+    // --- v0.2 F4: the mandatory dreaming stage ---
+    const roundBest = closed.stats.bestScore
+    const stagnating = roundBest === null || previousBest === null || roundBest <= previousBest
+    if (this.config.autoDream === 'every-cycle' || (this.config.autoDream === 'on-stagnation' && stagnating)) {
+      try {
+        const report = await this.dream({}, opts)
+        result.autoDream = { report }
+      } catch (error) {
+        // A failed improvement stage never fails the round: the incumbent
+        // stays active and the failure is surfaced in the result.
+        result.autoDream = { report: null, skippedReason: `autoDream failed: ${error instanceof Error ? error.message : String(error)}` }
+      }
+    } else {
+      result.autoDream = {
+        report: null,
+        skippedReason: this.config.autoDream === 'off'
+          ? 'autoDream is off'
+          : 'on-stagnation: the round improved the best score overall',
+      }
+    }
+    return result
   }
 
   // ------------------------------------------------------------ history read
@@ -491,35 +563,76 @@ export class DreamEngine {
    * candidate 0 automatically, every candidate is replay-scored over all
    * closed trees, and the ranked report is persisted. The active policy is
    * NOT changed — that is `dreamrsi_policy_set`'s job.
+   *
+   * v0.2 F1: candidates may be CODE policies (a Python `solve(view)` source —
+   * a bare string or `{ code, name?, W? }`) or legacy DSL objects; each is
+   * replayed by its own representation. Code candidates run in ONE subprocess
+   * per candidate (all worlds inside it); without a subprocess seam they
+   * replay as invalid while the rest of the run proceeds.
    */
-  async dream(input: { candidates: readonly unknown[]; sweepBetas?: readonly number[]; strictGuards?: boolean }, opts: WorkspaceOption = {}): Promise<DreamReport> {
+  async dream(input: { candidates?: readonly unknown[]; sweepBetas?: readonly number[]; strictGuards?: boolean }, opts: WorkspaceOption = {}): Promise<DreamReport> {
     const ws = await this.workspaceReady(opts.workspaceRoot)
     const active = await ws.store.getActivePolicy()
     if (!active) throw new EngineError('no active policy to seed candidate 0')
     const closed = (await ws.store.listRounds()).filter((round) => round.status === 'closed')
     const worlds: ReplayWorld[] = []
     for (const round of closed) worlds.push(await this.worldFor(ws, round.roundId))
+    const historyDigest = await this.historyDigest(ws)
+    const normalization = computeNormalization(worlds, this.config.normalizeScores)
 
-    const candidates: { dsl: PolicyDsl; version: string | null }[] = [
-      { dsl: active.params, version: active.version },
+    // Candidate 0: the incumbent, replayed by its own representation.
+    const candidates: DreamCandidate[] = [active.kind === 'code'
+      ? { kind: 'code', code: active.code ?? '', name: active.name ?? active.version, W: active.W ?? 4, version: active.version }
+      : { kind: 'dsl', dsl: active.params as PolicyDsl, version: active.version },
     ]
-    for (const raw of input.candidates) {
-      candidates.push({ dsl: raw as PolicyDsl, version: null })
+    for (const raw of input.candidates ?? []) {
+      candidates.push(toDreamCandidate(raw))
     }
 
+    // Code candidates need their source on disk for the runner; temp files
+    // live beside the policies as dot-files and are removed after the run.
     const runId = await ws.store.nextDreamRunId()
-    const report = runDream({
-      candidates,
-      worlds,
-      config: this.config,
-      runId,
-      createdAt: ws.store.now(),
-      sweepBetas: [...(input.sweepBetas ?? [])],
-      strictGuards: input.strictGuards ?? false,
-    })
-    await ws.store.saveDreamReport(report as unknown as DreamStoreReport)
-    await ws.store.logEvent('dreamrsi_dream', { candidateCount: candidates.length, sweepBetas: input.sweepBetas ?? [] }, { runId, selected: report.selectedCandidate }, active.version)
-    return report
+    const runtime: CodePolicyRuntime | undefined = this.subprocess === undefined
+      ? undefined
+      : {
+        subprocess: this.subprocess,
+        runnerPath: runnerPathOf(ws.store.root),
+        policyDir: path.join(ws.store.root, 'policies'),
+        policyPathFor: (index: number) => path.join(ws.store.root, 'policies', `.dream-candidate-${runId}-${String(index).padStart(3, '0')}.py`),
+        episodeTimeoutMs: this.config.policyEpisodeTimeoutMs,
+        historyDigest,
+        scoreScale: { min: normalization.min, max: normalization.max },
+      }
+    const candidateFiles: string[] = []
+    if (runtime !== undefined) {
+      for (const [index, candidate] of candidates.entries()) {
+        if (candidate.kind !== 'code') continue
+        const file = runtime.policyPathFor(index)
+        await writeFile(file, candidate.code, 'utf8')
+        candidateFiles.push(file)
+      }
+    }
+
+    try {
+      const report = await runDream({
+        candidates,
+        worlds,
+        config: this.config,
+        runId,
+        createdAt: ws.store.now(),
+        sweepBetas: [...(input.sweepBetas ?? [])],
+        strictGuards: input.strictGuards ?? false,
+        ...(runtime !== undefined ? { runtime } : {}),
+        historyDigest,
+      })
+      await ws.store.saveDreamReport(report as unknown as DreamStoreReport)
+      await ws.store.logEvent('dreamrsi_dream', { candidateCount: candidates.length, sweepBetas: input.sweepBetas ?? [] }, { runId, selected: report.selectedCandidate, selectedKind: report.selectedKind }, active.version)
+      return report
+    } finally {
+      for (const file of candidateFiles) {
+        await rm(file, { force: true })
+      }
+    }
   }
 
   // ---------------------------------------------------------------- policies
@@ -543,29 +656,53 @@ export class DreamEngine {
   }
 
   /**
-   * Commit a policy version as active (spec §7.7). Two input variants:
+   * Commit a policy version as active (spec §7.7). Input variants:
    * `{ version }` activates an existing version; `{ policy, notes }` registers
-   * a new immutable version (parent = incumbent) first. The no-regression
-   * guard rejects strictly worse evaluated versions unless `force`.
+   * a new immutable DSL version (parent = incumbent) first; `{ code, name?,
+   * notes }` (v0.2 F1) registers a new immutable CODE policy. The
+   * no-regression guard rejects strictly worse evaluated versions unless
+   * `force`.
    */
-  async policySet(input: { version?: string; policy?: unknown; notes?: string; force?: boolean }, opts: WorkspaceOption = {}): Promise<PolicySetResult> {
+  async policySet(input: { version?: string; policy?: unknown; code?: string; name?: string; notes?: string; force?: boolean }, opts: WorkspaceOption = {}): Promise<PolicySetResult> {
     const ws = await this.workspaceReady(opts.workspaceRoot)
     const force = input.force ?? false
     const previous = await ws.store.getActivePolicyVersion()
     let version = input.version
-    if (input.policy !== undefined) {
+    let registeredKind: 'dsl' | 'code' | null = null
+    if (input.code !== undefined) {
+      if (input.version !== undefined || input.policy !== undefined) {
+        throw new EngineError('pass only one of `version`, `policy`, or `code`')
+      }
+      if (typeof input.code !== 'string' || input.code.trim().length === 0) {
+        throw new EngineError('`code` must be a non-empty Python policy source string')
+      }
+      if (!input.code.includes('def solve')) {
+        throw new EngineError('`code` must define a callable solve(view) (missing `def solve`)')
+      }
+      const record = await ws.store.registerCodePolicy(
+        input.code,
+        typeof input.name === 'string' && input.name.trim() !== '' ? input.name : 'code-policy',
+        input.notes ?? '',
+        previous,
+        'candidate',
+      )
+      version = record.version
+      registeredKind = 'code'
+    } else if (input.policy !== undefined) {
       if (input.version !== undefined) throw new EngineError('pass either `version` or `policy`, not both')
       const validation = validatePolicyDsl(input.policy)
       if (!validation.ok) throw new EngineError(`invalid PolicyDsl: ${validation.errors.join('; ')}`)
       const record = await ws.store.registerPolicy(input.policy as PolicyDsl, input.notes ?? '', previous, 'candidate')
       version = record.version
+      registeredKind = 'dsl'
     }
-    if (!version) throw new EngineError('provide a `version` to activate or a `policy` to register and activate')
+    if (!version) throw new EngineError('provide a `version` to activate, a `policy` to register and activate, or a `code` policy to register and activate')
     const result = await ws.store.setActivePolicy(version, force)
     if (!result.accepted) {
       // Guard rejection: surface the report without changing the active
       // pointer; a freshly-registered candidate is marked `rejected` so it
       // stays auditable (spec §7.7 "rejects with the guard report").
+      if (registeredKind === 'code') await ws.store.markPolicyStatus(version, 'rejected')
       if (input.policy !== undefined) await ws.store.markPolicyStatus(version, 'rejected')
       return {
         accepted: false,

@@ -1,0 +1,26 @@
+# LEGACY / POWER-USER overlay: mount the Dream-RSI plugin directly into the
+# HOST composition. This puts the seven dreamrsi_* tools into EVERY session —
+# the preset path (see README "Install") is the recommended, baseline-clean way.
+#
+# 1. Replace <REPO_ABSOLUTE_PATH> with this repo's absolute path.
+# 2. Run-from-source DSH (tsx) can load src/index.ts directly; an installed dsh
+#    binary must point at the built dist/index.js.
+# 3. Launch: pnpm dsh web --patch ./examples/cordis.host-mount.yml.example
+- insert:
+    - id: dream-rsi
+      name: '<REPO_ABSOLUTE_PATH>/dist/index.js'
+      config:
+        dataDir: '.dreamrsi'
+        candidateCount: 3
+        maxOnlineRounds: 16
+        maxReplayRounds: 64
+        beta1: 0.01
+        beta2: 0.05
+        normalizeScores: true
+        estimatorMaxAnalogues: 5
+        estimatorMinAnalogues: 3
+        similarityFloor: 0.1
+        hallucinationTau: 0.18
+        noveltyLambda: 0.25
+        confidenceMediumTau: 0.45
+        similarityGamma: 2

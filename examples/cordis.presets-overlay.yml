@@ -1,0 +1,26 @@
+# Roots-discovery overlay for the Dream-RSI plugin.
+#
+# Instead of copying the preset into <dshHome>/.agent-presets, this overlay
+# points the agent-preset roster at THIS repository's preset/ directory.
+# Nothing is mounted into the baseline composition: selecting the "Dream-RSI"
+# preset in the new-session picker is what mounts the plugin for that session.
+#
+# 1. Replace <REPO-ABSOLUTE-PATH> below with this repo's absolute path.
+# 2. Keep dist/ built (pnpm install && pnpm build) - the preset row resolves
+#    '../dist/index.js' relative to preset/dream-rsi/.
+# 3. Launch: pnpm dsh web --patch ./examples/cordis.presets-overlay.yml
+#
+# CAUTION: patch layers REPLACE a row's entire config (no deep merge), so the
+# agent-presets row below restates the Web profile's default. If your
+# deployment sets a different default preset, change `default:` accordingly.
+- insert:
+    - id: agent-presets
+      name: '@deepseek-ai/dsh-agent-presets'
+      config:
+        default: standard
+        roots:
+          # trust: system = same trust class as shipped presets, because a
+          # preset IS a composition: it grants the capabilities of the rows it
+          # names. Only point roots at directories you trust.
+          - path: '<REPO_ABSOLUTE_PATH>/preset'
+            trust: system

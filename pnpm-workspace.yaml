@@ -1,0 +1,4 @@
+# pnpm 11 reads build-script allowlists from this file, not package.json.
+# esbuild's postinstall is required by vitest.
+allowBuilds:
+  esbuild: true

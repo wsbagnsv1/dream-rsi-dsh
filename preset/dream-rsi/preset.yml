@@ -1,0 +1,3 @@
+name: Dream-RSI
+description: The full standard coding agent plus the Dream-RSI recursive self-improvement loop — discovery-tree memory, offline replay scoring of candidate exploration policies, and dreaming-based policy improvement.
+order: 10

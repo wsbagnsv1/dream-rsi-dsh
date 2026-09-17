@@ -121,6 +121,10 @@ Set inline in the preset row (`preset/dream-rsi/agent.cordis.yml`) — every key
 | `autoDream` | `'every-cycle'` | v0.2 F4 — dreaming is a mandatory stage of every cycle: `dreamrsi_end_round` runs the improvement stage automatically. `'on-stagnation'` dreams only when a round fails to improve the best score; `'off'` keeps v0.1 behavior |
 | `trajectoryCap` | `20` | Max recorded steps per candidate × world trajectory digest in dream reports (F2's Listing 2 payload) |
 | `policyEpisodeTimeoutMs` | `30000` | Wall-clock budget per replay episode against a code policy; timeout → terminate + episode invalid |
+| `devLoop` | `'agent-relay'` | v0.2 F2 — policy-development loop. `'agent-relay'`: the dream report carries trajectory digests and the HOST AGENT authors + commits candidates (`dreamrsi_policy_set { code }`). `'host-llm'`: the framework calls the configured LLM with the verbatim Listing 2 prompt + trajectory payload and replays the parsed candidates (paper shape; needs a composed `ctx.llm` route, fail-soft to agent-relay without one) |
+| `poolSize` | `32` | Candidate pool size the host-llm loop generates per cycle |
+| `maxLlmCallsPerCycle` | `3` | LLM call budget per dreaming cycle (host-llm loop) |
+| `llmRoute` | — | Explicit `{ provider, model }` override; unset → the deployment's default route (first registered provider + first listed model) |
 | `similarityThreshold`, `similarityTemperature`, `similarityGamma` | `0.35` / `0.25` / `2` | RCO estimator similarity shaping |
 | `estimatorMaxAnalogues` / `estimatorMinAnalogues` | `5` / `3` | Top-k recorded analogues blended for novel-action estimates |
 | `similarityFloor`, `hallucinationTau`, `noveltyLambda`, `confidenceMediumTau` | `0.1` / `0.18` / `0.25` / `0.45` | Novelty penalty, abstention prior, confidence thresholds |

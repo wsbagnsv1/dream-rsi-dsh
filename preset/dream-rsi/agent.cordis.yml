@@ -311,3 +311,13 @@
     autoDream: 'every-cycle'
     trajectoryCap: 20
     policyEpisodeTimeoutMs: 30000
+    # v0.2 F2: the policy-development loop. 'agent-relay' (default) keeps the
+    # DSH-native shape — the dream report carries trajectory digests and the
+    # session agent authors + commits candidates via dreamrsi_policy_set
+    # { code }. 'host-llm' is the paper shape: the framework calls the
+    # configured LLM (fail-soft ctx.get('llm'); llmRoute overrides the
+    # deployment default route) with the verbatim Listing 2 prompt and
+    # replays the parsed pool of candidate code policies.
+    devLoop: 'agent-relay'
+    poolSize: 32
+    maxLlmCallsPerCycle: 3

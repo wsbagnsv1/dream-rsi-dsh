@@ -321,3 +321,8 @@
     devLoop: 'agent-relay'
     poolSize: 32
     maxLlmCallsPerCycle: 3
+    # v0.2 F3 (paper-faithful default): strictly on-manifold replay — recorded
+    # reveals only; a selection whose recorded continuation is exhausted
+    # reveals nothing. Set 'rco' to re-enable §5.3 similarity-estimated
+    # outcomes for novel actions (documented extension caveats).
+    estimate: 'off'

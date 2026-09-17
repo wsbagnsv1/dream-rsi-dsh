@@ -96,6 +96,14 @@ export interface PluginConfig {
   maxLlmCallsPerCycle: number
   /** Explicit LLM route override; unset → first registered provider + its first listed model. */
   llmRoute?: { provider: string; model: string }
+  /**
+   * Replay estimator mode (v0.2 F3, paper-faithful default `'off'`):
+   * `'off'` = strictly on-manifold replay (recorded reveals only; a
+   * selection whose recorded continuation is exhausted reveals nothing);
+   * `'rco'` = §5.3 similarity-estimated outcomes for novel actions (our
+   * superset; calibration caveats documented as extension caveats).
+   */
+  estimate: 'off' | 'rco'
 }
 
 /** Schema defaults, kept in one place so `index.ts` and docs stay in sync. */
@@ -121,6 +129,7 @@ export const DEFAULT_CONFIG: Omit<PluginConfig, 'dataDir'> & { dataDir: string }
   devLoop: 'agent-relay',
   poolSize: 32,
   maxLlmCallsPerCycle: 3,
+  estimate: 'off',
 }
 
 // ---------------------------------------------------------------------------

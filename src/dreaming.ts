@@ -587,7 +587,13 @@ async function replayWorldWithDriver(
   normalization: Normalization,
 ): Promise<{ result: WorldReplayResult; openedBranches: number; allBatches: number[]; estCount: number; reveals: number }> {
   const observed = initObserved(world)
-  const est: EstimateContext | null = driver.kind === 'dsl' ? { world, pool, config, dsl: driver.dsl } : null
+  // v0.2 F3: RCO estimation is gated by config.estimate ('off' = paper
+  // default, strictly on-manifold). Code candidates have no gridPlan, so the
+  // estimator context is DSL-only; code candidates always replay strictly
+  // on-manifold (novel selections reveal nothing → exhaustion semantics).
+  const est: EstimateContext | null = driver.kind === 'dsl'
+    ? { world, pool, config, dsl: driver.dsl, estimate: config.estimate }
+    : null
   const capK = Math.min(config.maxReplayRounds, driver.episodeCap)
   let invalid: string | null = null
   let stopReason: ReplayStopReason = 'round-cap'
@@ -612,6 +618,22 @@ async function replayWorldWithDriver(
     const violation = checkBatchRecords(world, observed, batch, driver.width)
     if (violation !== null) {
       invalid = violation
+      stopReason = 'invalid'
+      break
+    }
+    // Paper action space (v0.2 F-a ENFORCED): every batch id must be a
+    // SELECTABLE node of the current observed prefix (root + current leaves)
+    // that is RECORDED in this world. Unknown or non-selectable ids are an
+    // illegal batch (−∞), not silently skipped — the replay action space is
+    // the recorded tree.
+    const selectableIds = new Set<string>()
+    for (const reveal of observed.revealed.values()) {
+      const node = reveal.node
+      if (node.kind === 'root' || !hasRevealedChild(world, observed.revealed, node.id)) selectableIds.add(node.id)
+    }
+    const offActionSpace = batch.filter((id) => !selectableIds.has(id) || !world.nodeById.has(id))
+    if (offActionSpace.length > 0) {
+      invalid = `batch ids outside the replay action space: ${offActionSpace.join(', ')}`
       stopReason = 'invalid'
       break
     }

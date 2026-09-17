@@ -181,6 +181,11 @@ export interface EstimateContext {
   config: PluginConfig
   /** The candidate policy (grid plan budgets + novel action descriptor). */
   dsl: PolicyDsl
+  /**
+   * Estimator mode (v0.2 F3): `'off'` = recorded reveals only (paper
+   * default); `'rco'` = similarity-estimated outcomes for novel actions.
+   */
+  estimate: EstimateMode
 }
 
 /** Result of one replay step. */
@@ -196,8 +201,26 @@ export interface StepResult {
  * Does not mutate `observed` — the caller folds `revealed` in via
  * {@link commitReveals}.
  */
+/**
+ * The replay estimator mode (v0.2 F3): `'off'` (paper-faithful default)
+ * reveals recorded children only — a selection whose recorded continuation
+ * is exhausted reveals nothing (episode exhaustion semantics); `'rco'`
+ * re-enables the §5.3 similarity estimator for novel actions.
+ */
+export type EstimateMode = 'off' | 'rco'
+
+/**
+ * Execute ONE decision: reveal the recorded children of the selected batch
+ * (paper `Child` rule). With `est === null` (estimate 'off', the default) or
+ * an `est.estimate === 'off'` mode, selections whose recorded continuation is
+ * exhausted reveal nothing — strictly on-manifold replay. With
+ * `est.estimate === 'rco'`, exhausted selections whose grid-plan budget still
+ * holds produce a similarity-estimated outcome (spec §5.3). Does not mutate
+ * `observed` — the caller folds `revealed` in via {@link commitReveals}.
+ */
 export function step(world: ReplayWorld, observed: ObservedState, batch: readonly string[], est: EstimateContext | null): StepResult {
   const revealed: Reveal[] = []
+  const rcoOn = est !== null && est.estimate === 'rco'
   for (const nodeId of batch) {
     const fromObserved = observed.revealed.get(nodeId)
     const node: NodeRecord | undefined = fromObserved !== undefined ? fromObserved.node : world.nodeById.get(nodeId)
@@ -208,8 +231,8 @@ export function step(world: ReplayWorld, observed: ObservedState, batch: readonl
         revealed.push({ node: next, estimated: false, confidence: null })
         continue
       }
-      // Novel branch open: allowed while the grid plan budgets more branches.
-      if (est && observed.branchCount < est.dsl.gridPlan.branchCount) {
+      // Novel branch open: only under RCO, while the grid plan budgets it.
+      if (rcoOn && observed.branchCount < est.dsl.gridPlan.branchCount) {
         revealed.push(estimateReveal(est, observed, node, 'root-open'))
       }
       continue
@@ -222,8 +245,8 @@ export function step(world: ReplayWorld, observed: ObservedState, batch: readonl
         continue
       }
     }
-    // Novel refinement: allowed while the chain budget (refineCount) remains.
-    if (est && node.state.seqInBranch < est.dsl.gridPlan.refineCount) {
+    // Novel refinement: only under RCO, while the chain budget remains.
+    if (rcoOn && node.state.seqInBranch < est.dsl.gridPlan.refineCount) {
       revealed.push(estimateReveal(est, observed, node, 'refine'))
     }
   }

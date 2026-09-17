@@ -87,6 +87,7 @@ export const Config: Schema<PluginConfig> = Schema.object({
     provider: Schema.string(),
     model: Schema.string(),
   }).default(undefined as unknown as { provider: string; model: string }),
+  estimate: Schema.union(['off', 'rco'] as const).default(DEFAULT_CONFIG.estimate),
 })
 
 /** Default workspace root when a tool call carries no session workspace. */

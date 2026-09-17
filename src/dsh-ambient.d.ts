@@ -79,6 +79,67 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
+declare module '@deepseek-ai/cordis' {
+  /** Offset-based, non-consuming reader for one collect-mode stream. */
+  export interface SubprocessOutputReader {
+    readFrom(fromByte: number): {
+      text: string
+      nextOffset: number
+      lossy: boolean
+      spillPath?: string
+    }
+  }
+
+  /**
+   * Minimal structural mirror of the `ctx.subprocess` service surface
+   * (`SubprocessRuntime`, docs/subsystems/subprocess.md): fully-explicit
+   * spawn specs — argv never shell-interpreted, explicit stdio dispositions,
+   * scrubbed parent environment with caller opt-ins, and abort-signal-driven
+   * termination on the provider's managed range.
+   */
+  export interface SubprocessRuntime {
+    /**
+     * Start one managed child process from a fully-specified spec; the seam
+     * applies no defaults. Returns the live handle synchronously.
+     */
+    spawn(spec: {
+      /** Executable and arguments; argv[0] is the program. Never shell-interpreted. */
+      argv: readonly string[]
+      /** Working directory for the child. */
+      cwd: string
+      stdio: {
+        stdin: 'ignore' | 'pipe' | { readonly data: string }
+        stdout: 'pipe' | 'inherit' | { readonly maxBytes: number; readonly spill?: { readonly maxBytes: number } }
+        stderr: 'pipe' | 'inherit' | { readonly maxBytes: number; readonly spill?: { readonly maxBytes: number } }
+      }
+      /** Positive finite grace period for the provider's termination procedure. */
+      graceMs: number
+      /** Abort signal — starts the terminate escalation on the managed range. */
+      signal?: AbortSignal | undefined
+      /** Explicit environment entries merged onto the scrubbed parent base. */
+      env?: NodeJS.ProcessEnv | undefined
+    }): {
+      readonly stdin: import('node:stream').Writable | undefined
+      readonly stdout: import('node:stream').Readable | undefined
+      readonly stderr: import('node:stream').Readable | undefined
+      readonly collected: {
+        readonly stdout?: SubprocessOutputReader
+        readonly stderr?: SubprocessOutputReader
+      }
+      /** Resolves with exit facts (no cause classification, no output). */
+      readonly done: Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>
+      /** Begin the provider's termination procedure on the managed range. */
+      terminate(): void
+      waitForExit(signal?: AbortSignal): Promise<boolean>
+    }
+  }
+
+  interface Context {
+    /** Managed subprocess seam (the `subprocess` service; inject to require it). */
+    subprocess: SubprocessRuntime
+  }
+}
+
 declare module '@deepseek-ai/dsh-tools' {
   /** JSON scalar allowed in schema literals. */
   export type Scalar = string | number | boolean | null

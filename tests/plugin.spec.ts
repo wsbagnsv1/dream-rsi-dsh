@@ -95,7 +95,7 @@ describe('plugin export shape (Loader-safe, mirrors the schedule package convent
   it('exports name / inject / apply / Config and no default export', () => {
     expect('default' in plugin).toBe(false)
     expect(plugin.name).toBe('dream-rsi')
-    expect(plugin.inject).toEqual(['tools'])
+    expect(plugin.inject).toEqual(['tools', 'subprocess'])
     expect(typeof plugin.apply).toBe('function')
     expect(plugin.Config).toBeTypeOf('object')
     expect(plugin.DREAMRSI_TOOLS).toEqual([...DREAMRSI_TOOLS])
@@ -123,10 +123,11 @@ describe('apply() with a stub ctx', () => {
       name: 'dreamrsi_policy_get',
       arguments: {},
       token: null,
-    }) as { activeVersion: string; policy: { params: { name: string } } }
-    // bootstrap() ran during apply and registered the default policy.
+    }) as { activeVersion: string; policy: { kind?: string; params?: { name: string }; code?: string } }
+    // bootstrap() ran during apply and registered the default (code) policy.
     expect(result.activeVersion).toBe('v0001')
-    expect(result.policy.params.name).toBe('bootstrap-balanced')
+    expect(result.policy.kind).toBe('code')
+    expect(result.policy.code).toContain('def solve(view)')
     void root
   })
 

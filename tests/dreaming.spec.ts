@@ -45,8 +45,9 @@ function dreamInput(overrides: Partial<DreamInput> & { candidates: DreamInput['c
     createdAt: '2026-01-01T00:00:00.000Z',
     sweepBetas: [],
     strictGuards: false,
+    historyDigest: { rounds: 0, totalNodes: 0, bestScoreOverall: null, bestMechanisms: [], knownDeadEnds: [] },
     ...overrides,
-  }
+  } as DreamInput
 }
 
 /** Earliest candidate index achieving the max mean score. */
@@ -59,14 +60,14 @@ function expectedArgmax(ranking: { candidate: number; meanScore: number }[]): nu
 }
 
 describe('validatePolicyDsl (spec §6.1 invariants)', () => {
-  it('accepts the bootstrap default and a minimally valid DSL', () => {
+  it('accepts the bootstrap default and a minimally valid DSL', async () => {
     expect(validatePolicyDsl(defaultPolicyDsl(makeConfig())).ok).toBe(true)
     const result = validatePolicyDsl(makeDsl({ guidance: 'x'.repeat(201) }))
     expect(result.ok).toBe(true)
     expect(result.warnings.some((w) => w.includes('guidance'))).toBe(true)
   })
 
-  it('rejects non-objects and reports every invariant violation with a reason', () => {
+  it('rejects non-objects and reports every invariant violation with a reason', async () => {
     expect(validatePolicyDsl(null).ok).toBe(false)
     expect(validatePolicyDsl('nope').errors).toContain('candidate must be a PolicyDsl object')
 
@@ -104,7 +105,7 @@ describe('validatePolicyDsl (spec §6.1 invariants)', () => {
     }
   })
 
-  it('validates the optional novel descriptor', () => {
+  it('validates the optional novel descriptor', async () => {
     expect(validatePolicyDsl(makeDsl({ novel: { mechanism: '', tags: ['x'], summary: 's' } })).ok).toBe(false)
     expect(validatePolicyDsl(makeDsl({ novel: { mechanism: 'm', tags: ['x'], summary: '' } })).ok).toBe(false)
     const badTags = makeDsl() as unknown as Record<string, unknown>
@@ -115,7 +116,7 @@ describe('validatePolicyDsl (spec §6.1 invariants)', () => {
 })
 
 describe('defaultPolicyDsl — bootstrap policy', () => {
-  it('is valid, balanced, and derives maxRoundsK2 from the config', () => {
+  it('is valid, balanced, and derives maxRoundsK2 from the config', async () => {
     const dsl = defaultPolicyDsl(makeConfig({ maxReplayRounds: 32 }))
     const validation = validatePolicyDsl(dsl)
     expect(validation.ok).toBe(true)
@@ -130,7 +131,7 @@ describe('defaultPolicyDsl — bootstrap policy', () => {
 })
 
 describe('buildBranchViews — trajectory reconstruction', () => {
-  it('reconstructs chains with anchors, trend, and failure runs from the revealed prefix', () => {
+  it('reconstructs chains with anchors, trend, and failure runs from the revealed prefix', async () => {
     const world = twoBranchWorld()
     const observed = initObserved(world)
     // [root] reveals n001; [n001] reveals its chain child n002; [root] again
@@ -155,7 +156,7 @@ describe('buildBranchViews — trajectory reconstruction', () => {
     expect(branch1.bestAnchor).toBe(0.8)
   })
 
-  it('counts trailing consecutive failures (unevaluated counts as failure)', () => {
+  it('counts trailing consecutive failures (unevaluated counts as failure)', async () => {
     // Chain root → f1 (runtime failure) → f2 (unevaluated).
     const root = rootNode('r0003')
     const f1 = attemptNode({ id: 'r0003-n001', roundId: 'r0003', parentId: root.id, seq: 1, depth: 1, branchId: 0, seqInBranch: 0, score: 0, evaluated: true, failClass: 'runtime', error: 'boom' })
@@ -172,7 +173,7 @@ describe('buildBranchViews — trajectory reconstruction', () => {
     expect(must(views[0]).lastFailureClass).toBe('ok') // unevaluated f2: failClass ok but isFailure
   })
 
-  it('unrevealed nodes never appear in views (prefix-only)', () => {
+  it('unrevealed nodes never appear in views (prefix-only)', async () => {
     const world = twoBranchWorld()
     const observed = initObserved(world)
     expect(buildBranchViews(world, observed.revealed)).toEqual([])
@@ -180,7 +181,7 @@ describe('buildBranchViews — trajectory reconstruction', () => {
 })
 
 describe('selectBatch — deterministic interpreter (spec §6.1)', () => {
-  it('composes batches within W and never batches a parent with its child', () => {
+  it('composes batches within W and never batches a parent with its child', async () => {
     const world = twoBranchWorld()
     const observed = initObserved(world)
     const dsl = makeDsl()
@@ -194,21 +195,21 @@ describe('selectBatch — deterministic interpreter (spec §6.1)', () => {
     expect(new Set(batch).size).toBe(batch.length)
   })
 
-  it('is deterministic: identical inputs yield identical batches', () => {
+  it('is deterministic: identical inputs yield identical batches', async () => {
     const world = twoBranchWorld()
     const observed = initObserved(world)
     const dsl = makeDsl()
     expect(selectBatch(dsl, world, observed.revealed)).toEqual(selectBatch(dsl, world, observed.revealed))
   })
 
-  it('caps the batch at W=1 (serial policy)', () => {
+  it('caps the batch at W=1 (serial policy)', async () => {
     const world = twoBranchWorld()
     const observed = initObserved(world)
     const batch = selectBatch(makeDsl({ W: 1 }), world, observed.revealed)
     expect(batch).toHaveLength(1)
   })
 
-  it('stops (empty batch) when the grid budget is exhausted and nothing is legal', () => {
+  it('stops (empty batch) when the grid budget is exhausted and nothing is legal', async () => {
     const world = singleChainWorld()
     const dsl = makeDsl({
       W: 4,
@@ -231,7 +232,7 @@ describe('selectBatch — deterministic interpreter (spec §6.1)', () => {
     expect(selectBatch(dsl, world, observed.revealed)).toEqual([])
   })
 
-  it('a valid DSL always finds a candidate on the first round (root budget ≥ 1 branch)', () => {
+  it('a valid DSL always finds a candidate on the first round (root budget ≥ 1 branch)', async () => {
     for (const world of [twoBranchWorld(), singleChainWorld()]) {
       const observed = initObserved(world)
       expect(selectBatch(makeDsl(), world, observed.revealed).length).toBeGreaterThan(0)
@@ -240,7 +241,7 @@ describe('selectBatch — deterministic interpreter (spec §6.1)', () => {
 })
 
 describe('runDream — Eq. 1 scoring, selection, guards (spec §6.2, §6.3)', () => {
-  it('scores a hand-computable episode exactly (quality − β₁·N + β₂·bonus/max(1,k))', () => {
+  it('scores a hand-computable episode exactly (quality − β₁·N + β₂·bonus/max(1,k))', async () => {
     const world = singleChainWorld()
     const dsl = makeDsl({
       W: 4,
@@ -250,7 +251,7 @@ describe('runDream — Eq. 1 scoring, selection, guards (spec §6.2, §6.3)', ()
       pruning: { repairableClasses: ['compile'], hardFailClasses: [], closeAfterConsecutiveFailures: 3, minEvidenceForClosure: 2 },
       stopping: { stagnationRounds: 4, maxRoundsK2: 64 },
     })
-    const report = runDream(dreamInput({ candidates: [{ dsl, version: 'v0001' }], worlds: [world] }))
+    const report = await runDream(dreamInput({ candidates: [{ kind: 'dsl', dsl, version: 'v0001' }], worlds: [world] }))
     expect(report.historySize).toBe(1)
     expect(report.normalization).toEqual({ min: 0.6, max: 1.0, enabled: true })
     const entry = must(report.ranking[0])
@@ -273,11 +274,11 @@ describe('runDream — Eq. 1 scoring, selection, guards (spec §6.2, §6.3)', ()
     expect(entry.diagnostics.estOutcomeFraction).toBe(0)
   })
 
-  it('auto-respects candidate 0 as incumbent and never regresses below it', () => {
+  it('auto-respects candidate 0 as incumbent and never regresses below it', async () => {
     const world = twoBranchWorld()
     const serial = makeDsl({ name: 'serial', W: 1 })
     const wide = makeDsl({ name: 'wide', W: 2 })
-    const report = runDream(dreamInput({ candidates: [{ dsl: serial, version: 'v0001' }, { dsl: wide, version: null }], worlds: [world] }))
+    const report = await runDream(dreamInput({ candidates: [{ kind: 'dsl', dsl: serial, version: 'v0001' }, { kind: 'dsl', dsl: wide, version: null }], worlds: [world] }))
     expect(report.ranking).toHaveLength(2)
     expect(report.ranking[0]?.candidate).toBe(0)
     const selected = must(report.ranking.find((entry) => entry.candidate === report.selectedCandidate))
@@ -286,16 +287,16 @@ describe('runDream — Eq. 1 scoring, selection, guards (spec §6.2, §6.3)', ()
     expect(report.guards.incumbentScore).toBe(must(report.ranking[0]).meanScore)
   })
 
-  it('breaks score ties toward the earliest candidate', () => {
+  it('breaks score ties toward the earliest candidate', async () => {
     const world = singleChainWorld()
     const a = makeDsl({ name: 'twin-a' })
     const b = makeDsl({ name: 'twin-b' })
     // Identical behavior ⇒ identical scores; the earlier candidate must win.
-    const report = runDream(dreamInput({
+    const report = await runDream(dreamInput({
       candidates: [
-        { dsl: makeDsl({ name: 'incumbent', W: 1 }), version: 'v0001' },
-        { dsl: a, version: null },
-        { dsl: b, version: null },
+        { kind: 'dsl', dsl: makeDsl({ name: 'incumbent', W: 1 }), version: 'v0001' },
+        { kind: 'dsl', dsl: a, version: null },
+        { kind: 'dsl', dsl: b, version: null },
       ],
       worlds: [world],
     }))
@@ -309,12 +310,12 @@ describe('runDream — Eq. 1 scoring, selection, guards (spec §6.2, §6.3)', ()
     }
   })
 
-  it('scores invalid DSL candidates −∞ with a reason and never selects them', () => {
+  it('scores invalid DSL candidates −∞ with a reason and never selects them', async () => {
     const world = twoBranchWorld()
-    const report = runDream(dreamInput({
+    const report = await runDream(dreamInput({
       candidates: [
-        { dsl: makeDsl({ name: 'incumbent' }), version: 'v0001' },
-        { dsl: { name: 'broken', W: 0 } as unknown as PolicyDsl, version: null },
+        { kind: 'dsl', dsl: makeDsl({ name: 'incumbent' }), version: 'v0001' },
+        { kind: 'dsl', dsl: { name: 'broken', W: 0 } as unknown as PolicyDsl, version: null },
       ],
       worlds: [world],
     }))
@@ -326,16 +327,16 @@ describe('runDream — Eq. 1 scoring, selection, guards (spec §6.2, §6.3)', ()
     expect(report.selectedName).toBe('incumbent')
   })
 
-  it('strictGuards disqualify never-batching policies with INVALID_SCORE (spec §6.3.4)', () => {
+  it('strictGuards disqualify never-batching policies with INVALID_SCORE (spec §6.3.4)', async () => {
     const world = twoBranchWorld()
     const serial = makeDsl({ name: 'serial', W: 1 })
-    const lenient = runDream(dreamInput({ candidates: [{ dsl: serial, version: null }], worlds: [world], strictGuards: false }))
+    const lenient = await runDream(dreamInput({ candidates: [{ kind: 'dsl', dsl: serial, version: null }], worlds: [world], strictGuards: false }))
     const lenientEntry = must(lenient.ranking[0])
     expect(lenientEntry.invalid).toBeNull()
     expect(lenientEntry.meanScore).toBeGreaterThan(INVALID_SCORE)
     expect(lenientEntry.diagnostics.neverBatched).toBe(true)
 
-    const strict = runDream(dreamInput({ candidates: [{ dsl: serial, version: null }], worlds: [world], strictGuards: true }))
+    const strict = await runDream(dreamInput({ candidates: [{ kind: 'dsl', dsl: serial, version: null }], worlds: [world], strictGuards: true }))
     const strictEntry = must(strict.ranking[0])
     // strictGuards disqualification follows the same path as illegal batches:
     // the entry is marked invalid AND forced to INVALID_SCORE, so argmax
@@ -346,10 +347,10 @@ describe('runDream — Eq. 1 scoring, selection, guards (spec §6.2, §6.3)', ()
 
     // The disqualification is consequential: a degenerate challenger loses to
     // a healthy incumbent even when it would have scored higher unguarded.
-    const guarded = runDream(dreamInput({
+    const guarded = await runDream(dreamInput({
       candidates: [
-        { dsl: makeDsl({ name: 'incumbent', W: 1 }), version: 'v0001' },
-        { dsl: serial, version: null },
+        { kind: 'dsl', dsl: makeDsl({ name: 'incumbent', W: 1 }), version: 'v0001' },
+        { kind: 'dsl', dsl: serial, version: null },
       ],
       worlds: [world],
       strictGuards: true,
@@ -359,8 +360,8 @@ describe('runDream — Eq. 1 scoring, selection, guards (spec §6.2, §6.3)', ()
     expect(guarded.selectedName).toBe('incumbent')
   })
 
-  it('produces a well-formed report for an empty world pool', () => {
-    const report = runDream(dreamInput({ candidates: [{ dsl: makeDsl(), version: null }], worlds: [] }))
+  it('produces a well-formed report for an empty world pool', async () => {
+    const report = await runDream(dreamInput({ candidates: [{ kind: 'dsl', dsl: makeDsl(), version: null }], worlds: [] }))
     expect(report.historySize).toBe(0)
     expect(report.ranking).toHaveLength(1)
     const entry = must(report.ranking[0])
@@ -372,25 +373,25 @@ describe('runDream — Eq. 1 scoring, selection, guards (spec §6.2, §6.3)', ()
     expect(entry.diagnostics.stopsImmediately).toBe(false)
   })
 
-  it('is byte-deterministic: identical inputs produce deep-identical reports', () => {
+  it('is byte-deterministic: identical inputs produce deep-identical reports', async () => {
     const worlds = [twoBranchWorld(), singleChainWorld()]
     const candidates = [
-      { dsl: makeDsl({ name: 'incumbent' }), version: 'v0001' },
-      { dsl: makeDsl({ name: 'wide', W: 2, beta: 0.8 }), version: null },
-      { dsl: makeDsl({ name: 'novel-ish', W: 2, novel: { mechanism: 'anneal', tags: ['anneal'], summary: 'anneal harder' } }), version: null },
+      { kind: 'dsl' as const, dsl: makeDsl({ name: 'incumbent' }), version: 'v0001' },
+      { kind: 'dsl' as const, dsl: makeDsl({ name: 'wide', W: 2, beta: 0.8 }), version: null },
+      { kind: 'dsl' as const, dsl: makeDsl({ name: 'novel-ish', W: 2, novel: { mechanism: 'anneal', tags: ['anneal'], summary: 'anneal harder' } }), version: null },
     ]
-    const first = runDream(dreamInput({ candidates, worlds }))
-    const second = runDream(dreamInput({ candidates, worlds }))
+    const first = await runDream(dreamInput({ candidates, worlds }))
+    const second = await runDream(dreamInput({ candidates, worlds }))
     expect(second).toEqual(first)
     // Also identical across a differently-built but content-identical world pool.
     const rebuilt = [buildWorld('r0001', fixtureNodesTwoBranches()), buildWorld('r0002', fixtureNodesSingleChain())]
-    expect(runDream(dreamInput({ candidates, worlds: rebuilt }))).toEqual(first)
+    expect(await runDream(dreamInput({ candidates, worlds: rebuilt }))).toEqual(first)
   })
 
-  it('logs per-world terms separately and reports estimated-outcome fractions', () => {
+  it('logs per-world terms separately and reports estimated-outcome fractions', async () => {
     const worlds = [twoBranchWorld()]
-    const report = runDream(dreamInput({
-      candidates: [{ dsl: makeDsl({ name: 'incumbent' }), version: 'v0001' }],
+    const report = await runDream(dreamInput({
+      candidates: [{ kind: 'dsl', dsl: makeDsl({ name: 'incumbent' }), version: 'v0001' }],
       worlds,
     }))
     const entry = must(report.ranking[0])
@@ -402,10 +403,10 @@ describe('runDream — Eq. 1 scoring, selection, guards (spec §6.2, §6.3)', ()
     }
   })
 
-  it('runs the optional deterministic beta sweep (spec §6.4)', () => {
+  it('runs the optional deterministic beta sweep (spec §6.4)', async () => {
     const world = twoBranchWorld()
-    const report = runDream(dreamInput({
-      candidates: [{ dsl: makeDsl({ name: 'incumbent' }), version: 'v0001' }],
+    const report = await runDream(dreamInput({
+      candidates: [{ kind: 'dsl', dsl: makeDsl({ name: 'incumbent' }), version: 'v0001' }],
       worlds: [world],
       sweepBetas: [0, 0.6, 1],
     }))
@@ -415,7 +416,7 @@ describe('runDream — Eq. 1 scoring, selection, guards (spec §6.2, §6.3)', ()
     for (const point of must(entry.betaSweep)) {
       expect(Number.isFinite(point.reward)).toBe(true)
     }
-    const again = runDream(dreamInput({ candidates: [{ dsl: makeDsl({ name: 'incumbent' }), version: 'v0001' }], worlds: [world], sweepBetas: [0, 0.6, 1] }))
+    const again = await runDream(dreamInput({ candidates: [{ kind: 'dsl', dsl: makeDsl({ name: 'incumbent' }), version: 'v0001' }], worlds: [world], sweepBetas: [0, 0.6, 1] }))
     expect(must(again.ranking[0]).betaSweep).toEqual(entry.betaSweep)
   })
 })

@@ -76,6 +76,18 @@ Trust posture, restated for the subprocess surface: policy code is authored by t
 
 ---
 
+## Delivery form: unchanged — preset-gated, single package
+
+v0.2 ships exactly like v0.1: one package, one preset, baseline clean. Concretely:
+
+- **Same gating.** The seven (eight with judgment-list tools) `dreamrsi_*` tools mount only for sessions started on the `Dream-RSI` preset; the host composition is never touched; install paths unchanged (`install.ps1` / `install.sh` / roots overlay).
+- **Preset row grows its `inject` list.** F1 needs `subprocess` (host-plane service — preset rows resolve host services fine; only *publishing* services needs realms), F2 resolves `llm` via fail-soft `ctx.get('llm')` (no hard inject, so deployments without a route fall back to `agent-relay`). The row in `preset/dream-rsi/agent.cordis.yml` is updated accordingly, config block extended with the new keys (`autoDream: 'every-cycle'`, `poolSize`, `devLoop`, `estimate: 'off'`).
+- **Persona guidance v2.** The suffix workflow paragraph updates to the paper-faithful cycle (dreaming is mandatory each round; candidates are code policies; the dream report carries trajectories).
+- **Upgrade path for installed presets.** Installed copies are snapshots: after v0.2 lands, re-run the installer (or re-copy `preset/dream-rsi/`) — the composition file's stamp change starts a new generation for new sessions; plugin *code* changes reach them at the next server restart (documented reload behavior).
+- **Fence tests follow.** `preset.spec.ts` gains assertions for the extended inject list, the new config defaults, and the persona v2 workflow text.
+
+---
+
 ## Compatibility
 
 - Existing stores: DSL policies replay under `legacy`; new cycles generate code policies; `activeVersion` pointers preserved.

@@ -57,6 +57,10 @@ if ($PrintOverlay) {
 
 # --- copy + rewrite ----------------------------------------------------------
 New-Item -ItemType Directory -Force -Path (Split-Path $presetTarget) | Out-Null
+# Remove any previous install first: Copy-Item -Recurse into an EXISTING
+# directory nests the source inside it (preset\dream-rsi\dream-rsi\...),
+# which would leave the stale composition at the top level.
+if (Test-Path $presetTarget) { Remove-Item $presetTarget -Recurse -Force }
 Copy-Item (Join-Path $repoRoot 'preset/dream-rsi') $presetTarget -Recurse -Force
 
 $composition = Join-Path $presetTarget 'agent.cordis.yml'

@@ -186,9 +186,22 @@
   config:
     - id: tool-subagent-control
       name: '@deepseek-ai/dsh-tool-subagent-control'
+      # Renamed child-steering tools (V3): steer_agent/interrupt_child/
+      # list_children sit side by side with same-name team tools (which
+      # shadow standing-scope tools per own-layer-last resolution) — distinct
+      # names give lead sessions BOTH team messaging AND child steering.
+      config:
+        toolNames:
+          send: steer_agent
+          interrupt: interrupt_child
 
     - id: tool-subagent-list-agents
       name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+      config:
+        toolNames:
+          list: list_children
+          send: steer_agent
+          interrupt: interrupt_child
 
     - id: tool-subagent
       name: '@deepseek-ai/dsh-tool-subagent'

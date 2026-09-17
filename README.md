@@ -4,6 +4,8 @@ A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai) plugin that implement
 
 Give a DSH session a discovery task (algorithm engineering, optimization, kernels…), and the plugin turns its accumulated **discovery history into a replay simulator**: candidate *exploration policies* are replayed against recorded discovery trees for cheap off-policy feedback, the best policy is redeployed, and the loop compounds.
 
+**Benchmark result (n=26 circle packing, the AlphaEvolve/OpenEvolve example):** across 5 campaigns and ~2.5M evaluations of honest search, the loop improved a naive constructor from **0.9598 → 2.6358715 — exceeding AlphaEvolve's published 2.635** (ratio 1.000331, evaluator-verified, deterministic, 0.52s). The winning chain — a fleet-of-priors structural seed → a gravity/compaction basin re-settle (a *basin transform*: the same operator returns the old champion to its own basin under all schedules) → corrected-gradient deep polish — spanned four mechanism families, with the active exploration policy evolving through six versioned code/DSL revisions (`v0001 bootstrap → v0006 gravity-resettle-winner`) selected entirely by replay evidence. Full campaign reports: [`docs/CAMPAIGN-5-CIRCLE-PACKING.md`](docs/CAMPAIGN-5-CIRCLE-PACKING.md).
+
 ```
         ┌──────────────────────────────────────────────────────────┐
         │                  (outer iteration t)                     │

@@ -36,7 +36,7 @@
     suffix: |-
       Your working directory is {{cwd}}.
 
-      You are running the Dream-RSI recursive self-improvement loop; its discovery state lives under `.dreamrsi/` in the working directory. Workflow: `dreamrsi_begin_round` returns the active exploration policy (a JSON DSL you must follow) and a history digest. During the round, repeatedly pick a batch of at most W selectable nodes — the root opens a NEW branch, a current leaf refines its branch — execute each attempt with real tools, and log the measured outcomes with `dreamrsi_log_decision` (one call per batch, or per node with the same batchSeq). Close the round with `dreamrsi_end_round`, which freezes the finished tree as a replay world. Between rounds, read `dreamrsi_history` in full first, then propose K candidate policies as PolicyDsl JSON objects, score them offline with `dreamrsi_dream` — the incumbent always runs as candidate 0, so selection never regresses on replay — and commit the winner with `dreamrsi_policy_set`; `dreamrsi_policy_get` inspects any policy version.
+      You are running the Dream-RSI recursive self-improvement loop (v0.2, paper-faithful); its discovery state lives under `.dreamrsi/` in the working directory. The active exploration policy is a CODE policy — Python source defining `solve(view)` — which `dreamrsi_begin_round` hands you as `policySource`; execute it mentally and act as it prescribes, alongside a history digest. During the round, repeatedly pick a batch of at most W selectable nodes — the root opens a NEW branch, a current leaf refines its branch — execute each attempt with real tools, and log the measured outcomes with `dreamrsi_log_decision` (one call per batch, or per node with the same batchSeq). Dreaming is MANDATORY every cycle: closing the round with `dreamrsi_end_round` freezes the tree as a replay world and then automatically runs the improvement stage, whose report carries per-world trajectory digests. Read `dreamrsi_history` in full each cycle; when development stalls or the report shows a plateau, author NEW candidate policies as Python code policies (solve(view) sources — submitted to `dreamrsi_dream` as bare strings, committed with `dreamrsi_policy_set { code }`); the incumbent always runs as candidate 0, so selection never regresses on replay. `dreamrsi_policy_get` inspects any version, including its Python source.
     prefix: >-
       You are a coding agent powered by the {{model}} model.
 
@@ -270,13 +270,15 @@
 
 # The Dream-RSI loop: registers the seven `dreamrsi_*` tools into the host
 # `tools` registry and provides no service, so — like the other tool-only rows
-# above — it needs no isolate realm.
+# above — it needs no isolate realm. v0.2 injects the host `subprocess` seam:
+# code policies (`solve(view)` Python modules) execute through it as managed
+# `python -I` children with the JSON-lines decision protocol.
 #
-# `name` is an ABSOLUTE path to this package's plugin entry, exactly as this
-# package was laid down on disk; discovery's health check stats that file, so
-# adjust the path if the package moves. The plugin's configuration travels
-# inline here (a preset-mounted plugin cannot register a settings namespace —
-# editing these values is this file's job).
+# `name` is a preset-relative path to the built plugin entry this package
+# ships (dist/); discovery resolves it against this preset's directory, so it
+# travels with the preset. The plugin's configuration travels inline here (a
+# preset-mounted plugin cannot register a settings namespace — editing these
+# values is this file's job).
 #
 # State is PER WORKSPACE: a relative `dataDir` resolves against the calling
 # agent's session workspace on every tool call (the same session-cwd lookup
@@ -285,6 +287,7 @@
 # pins one shared store for every session instead.
 - id: dream-rsi
   name: '../../dist/index.js'
+  inject: [tools, subprocess]
   config:
     dataDir: '.dreamrsi'
     candidateCount: 3
@@ -300,3 +303,26 @@
     noveltyLambda: 0.25
     confidenceMediumTau: 0.45
     similarityGamma: 2
+    # v0.2 paper-faithful defaults (ROADMAP-v0.2 F1+F4): code policies are the
+    # primary representation, dreaming is a mandatory stage of every cycle,
+    # trajectory digests are capped at 20 steps per world, and each replay
+    # episode (policy × world) gets a 30 s wall-clock budget.
+    policyEngine: 'code'
+    autoDream: 'every-cycle'
+    trajectoryCap: 20
+    policyEpisodeTimeoutMs: 30000
+    # v0.2 F2: the policy-development loop. 'agent-relay' (default) keeps the
+    # DSH-native shape — the dream report carries trajectory digests and the
+    # session agent authors + commits candidates via dreamrsi_policy_set
+    # { code }. 'host-llm' is the paper shape: the framework calls the
+    # configured LLM (fail-soft ctx.get('llm'); llmRoute overrides the
+    # deployment default route) with the verbatim Listing 2 prompt and
+    # replays the parsed pool of candidate code policies.
+    devLoop: 'agent-relay'
+    poolSize: 32
+    maxLlmCallsPerCycle: 3
+    # v0.2 F3 (paper-faithful default): strictly on-manifold replay — recorded
+    # reveals only; a selection whose recorded continuation is exhausted
+    # reveals nothing. Set 'rco' to re-enable §5.3 similarity-estimated
+    # outcomes for novel actions (documented extension caveats).
+    estimate: 'off'

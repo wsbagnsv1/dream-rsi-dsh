@@ -26,8 +26,10 @@
 import { appendFile, mkdir, readFile, rename, readdir, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import * as path from 'node:path'
+import { PYTHON_RUNNER_SOURCE } from './bootstrap-policy.ts'
 import type {
   NodeRecord,
+  PolicyDsl,
   PolicyEvaluation,
   PolicyIndex,
   PolicyIndexEntry,
@@ -116,12 +118,15 @@ export class DreamStore {
 
   // ------------------------------------------------------------------ setup
 
-  /** Create the directory layout and write-once config snapshot. Idempotent. */
+  /** Create the directory layout, the code-policy runner, and the config snapshot. Idempotent. */
   async init(): Promise<void> {
     if (this.initialized) return
     await mkdir(path.join(this.root, 'trees'), { recursive: true })
     await mkdir(path.join(this.root, 'policies'), { recursive: true })
     await mkdir(path.join(this.root, 'dreams'), { recursive: true })
+    // The code-policy runner is plugin-owned infrastructure, not user state:
+    // it is rewritten on every init so it always matches the running plugin.
+    await writeFile(path.join(this.root, 'policies', RUNNER_FILE_NAME), PYTHON_RUNNER_SOURCE, 'utf8')
     const configPath = path.join(this.root, 'config.json')
     if (!existsSync(configPath)) {
       await writeJsonAtomic(configPath, {
@@ -134,6 +139,9 @@ export class DreamStore {
           beta1: this.config.beta1,
           beta2: this.config.beta2,
           normalizeScores: this.config.normalizeScores,
+          policyEngine: this.config.policyEngine,
+          autoDream: this.config.autoDream,
+          trajectoryCap: this.config.trajectoryCap,
         },
       })
     }
@@ -530,7 +538,7 @@ export class DreamStore {
    * `evaluation` bookkeeping block ever change on an existing record.
    */
   async registerPolicy(
-    params: PolicyRecord['params'],
+    params: PolicyDsl,
     notes: string,
     parentId: string | null,
     status: PolicyRecord['status'] = 'candidate',
@@ -542,6 +550,7 @@ export class DreamStore {
       createdAt: this.now(),
       status,
       parentId,
+      kind: 'dsl',
       params,
       notes,
       evaluation: { meanReplayScore: null, perWorldScores: null, betaSweep: null },
@@ -554,17 +563,67 @@ export class DreamStore {
       createdAt: record.createdAt,
       parentId,
       name: params.name,
+      kind: 'dsl',
     }
     await this.savePolicyIndex({ ...index, versions: [...index.versions, entry] })
     await this.logEvent('policy.register', { version, parentId, name: params.name }, { version }, version)
     return record
   }
 
-  /** Read one full policy payload, or null when absent. */
+  /**
+   * Register a NEW immutable CODE policy version (v0.2 F1): the Python source
+   * lands as `policies/<version>.py`, the record json carries `kind: 'code'`
+   * plus the source path, and the index entry records the lineage.
+   */
+  async registerCodePolicy(
+    code: string,
+    name: string,
+    notes: string,
+    parentId: string | null,
+    status: PolicyRecord['status'] = 'candidate',
+  ): Promise<PolicyRecord> {
+    await this.init()
+    const version = await this.nextPolicyVersion()
+    const codePath = `${version}.py`
+    await writeFile(path.join(this.root, 'policies', codePath), code, 'utf8')
+    const record: PolicyRecord = {
+      version,
+      createdAt: this.now(),
+      status,
+      parentId,
+      kind: 'code',
+      name,
+      code,
+      notes,
+      evaluation: { meanReplayScore: null, perWorldScores: null, betaSweep: null },
+    }
+    await writeJsonAtomic(path.join(this.root, 'policies', `${version}.json`), { ...record, code: undefined, codePath })
+    const index = await this.getPolicyIndex()
+    const entry: PolicyIndexEntry = {
+      version,
+      status,
+      createdAt: record.createdAt,
+      parentId,
+      name,
+      kind: 'code',
+    }
+    await this.savePolicyIndex({ ...index, versions: [...index.versions, entry] })
+    await this.logEvent('policy.register', { version, parentId, name, kind: 'code' }, { version }, version)
+    return { ...record, code }
+  }
+
+  /** Read one full policy payload, or null when absent. Code records hydrate their `.py` source. */
   async getPolicy(version: string): Promise<PolicyRecord | null> {
     const file = path.join(this.root, 'policies', `${version}.json`)
     if (!existsSync(file)) return null
-    return JSON.parse(await readFile(file, 'utf8')) as PolicyRecord
+    const record = JSON.parse(await readFile(file, 'utf8')) as PolicyRecord & { codePath?: string }
+    if (record.kind === 'code' && record.codePath !== undefined) {
+      const codeFile = path.join(this.root, 'policies', record.codePath)
+      if (existsSync(codeFile)) {
+        record.code = await readFile(codeFile, 'utf8')
+      }
+    }
+    return record
   }
 
   /** The active policy version id, or null when none. */
@@ -684,6 +743,19 @@ export type DreamStoreReport = { runId: string } & Record<string, unknown>
 /** Root node id of a round (`r0001-n000`). */
 export function rootIdOf(roundId: string): string {
   return `${roundId}-n000`
+}
+
+/** File name of the shipped code-policy runner inside `policies/`. */
+export const RUNNER_FILE_NAME = '.runner.py'
+
+/** Absolute path of the shipped runner for a store root. */
+export function runnerPathOf(storeRoot: string): string {
+  return path.join(storeRoot, 'policies', RUNNER_FILE_NAME)
+}
+
+/** Absolute path of one policy's Python source for a store root. */
+export function policySourcePathOf(storeRoot: string, version: string): string {
+  return path.join(storeRoot, 'policies', `${version}.py`)
 }
 
 /** Node id for a per-round creation sequence (`r0001-n003`). */

@@ -242,6 +242,55 @@ describe('preset discovery overlay (examples/) — no host mount in the preset p
   })
 })
 
+describe('v0.2 paper-faithful preset row (task-15 fences)', () => {
+  /** The dream-rsi row of the preset composition. */
+  async function dreamRow(): Promise<{ row: Row; raw: string }> {
+    const text = await readFile(path.join(PRESET_DIR, 'agent.cordis.yml'), 'utf8')
+    const doc = await readYaml(path.join(PRESET_DIR, 'agent.cordis.yml'))
+    const row = must((doc as Row[]).find((entry) => entry.id === 'dream-rsi'))
+    return { row, raw: text }
+  }
+
+  it('injects the host subprocess seam alongside tools', async () => {
+    const { row } = await dreamRow()
+    expect(row.inject).toEqual(['tools', 'subprocess'])
+  })
+
+  it('carries the v0.2 paper-faithful config defaults inline', async () => {
+    const { row } = await dreamRow()
+    const config = row.config as Row
+    expect(config.policyEngine).toBe('code')
+    expect(config.autoDream).toBe('every-cycle')
+    expect(config.trajectoryCap).toBe(20)
+    expect(config.policyEpisodeTimeoutMs).toBe(30000)
+    expect(config.devLoop).toBe('agent-relay')
+    expect(config.poolSize).toBe(32)
+    // F3: strictly on-manifold replay by default (paper-faithful).
+    expect(config.estimate).toBe('off')
+  })
+
+  it('persona suffix carries the v2 code-policy workflow text', async () => {
+    const { row } = await dreamRow()
+    const persona = must((await readYaml(path.join(PRESET_DIR, 'agent.cordis.yml')) as Row[]).find((entry) => entry.id === 'persona'))
+    void row
+    const suffix = String((persona.config as Row).suffix)
+    expect(suffix).toContain('solve(view)') // code policies, not a JSON DSL
+    expect(suffix.toLowerCase()).toContain('mandatory') // dreaming is a mandatory stage
+    expect(suffix).toContain('trajectory') // digests surfaced to the agent
+    expect(suffix).toContain('policySource')
+    expect(suffix).toContain('{ code }') // agent-relay submission shape
+  })
+
+  it('keeps the entry reference travel-with-preset (preset-relative, no machine path)', async () => {
+    const { row, raw } = await dreamRow()
+    const name = String(row.name)
+    expect(path.isAbsolute(name)).toBe(false)
+    expect(name).toContain('dist/index.js')
+    // Sanitized repo: no absolute machine paths anywhere in the preset.
+    expect(raw).not.toMatch(/[A-Z]:\\|\/Users\//)
+  })
+})
+
 function must<T>(value: T | null | undefined, message = 'expected a value'): T {
   if (value === null || value === undefined) throw new Error(message)
   return value

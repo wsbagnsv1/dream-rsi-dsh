@@ -109,7 +109,7 @@ export function buildToolDefinitions(engine: DreamEngine): AnyToolDefinition[] {
   return [
     defineTool({
       name: 'dreamrsi_begin_round',
-      description: 'Start one Dream-RSI online rollout (outer iteration). Creates the round and returns the active exploration policy (a JSON DSL you must follow), the round limits (maxRounds K1, maxParallelism W), and a digest of prior discovery history. Then repeatedly inspect the growing tree, pick a batch of at most W selectable nodes (the root opens a NEW branch; a current leaf refines that branch), execute the attempts, and log them with dreamrsi_log_decision.',
+      description: 'Start one Dream-RSI online rollout (outer iteration). Creates the round and returns the active exploration policy — a v0.2 CODE policy (policySource: Python source defining solve(view); execute it mentally and act as it prescribes) or a legacy JSON DSL (policy) — plus the round limits (maxRounds K1, maxParallelism W) and a digest of prior discovery history. Then repeatedly inspect the growing tree, pick a batch of at most W selectable nodes (the root opens a NEW branch; a current leaf refines that branch), execute the attempts, and log them with dreamrsi_log_decision.',
       parameters: {},
       output: {
         schema: {
@@ -118,7 +118,9 @@ export function buildToolDefinitions(engine: DreamEngine): AnyToolDefinition[] {
           properties: {
             roundId: { type: 'string', required: true },
             policyVersion: { type: 'string', required: true },
-            policy: { type: 'object', additionalProperties: true, description: 'active PolicyDsl' },
+            policyKind: { type: 'string', required: true, enum: ['dsl', 'code'] },
+            policy: { type: 'object', additionalProperties: true, description: 'active legacy PolicyDsl (dsl incumbents)' },
+            policySource: { type: 'string', description: 'active code policy Python source (code incumbents)' },
             limits: { type: 'object', additionalProperties: true, description: '{ maxRounds, maxParallelism }' },
             historyDigest: { type: 'object', additionalProperties: true, description: 'history summary: rounds, totalNodes, bestScoreOverall, bestMechanisms, knownDeadEnds' },
             workspace: {
@@ -288,19 +290,19 @@ export function buildToolDefinitions(engine: DreamEngine): AnyToolDefinition[] {
 
     defineTool({
       name: 'dreamrsi_dream',
-      description: 'Offline dreaming: replay-score candidate exploration policies (PolicyDsl JSON objects you propose) against every recorded discovery tree, and get a ranked report with per-world diagnostics and selection guards. The currently active policy is ALWAYS evaluated as candidate 0, so selection can never regress on the replay history. Does NOT change the active policy — commit the winner with dreamrsi_policy_set. No LLM calls or network happen inside this tool.',
+      description: 'Offline dreaming: replay-score candidate exploration policies against every recorded discovery tree, and get a ranked report with per-world diagnostics, trajectory digests, and selection guards. Candidates are v0.2 CODE policies — a bare Python source string defining solve(view), or { code, name?, W? } — or legacy PolicyDsl JSON objects. The currently active policy is ALWAYS evaluated as candidate 0, so selection can never regress on the replay history. Does NOT change the active policy — commit the winner with dreamrsi_policy_set. No LLM calls or network happen inside this tool.',
       parameters: {
         candidates: {
           type: 'array',
           required: true,
-          description: 'Candidate PolicyDsl objects (do not include the incumbent; it is added automatically)',
-          items: { type: 'object', additionalProperties: true, description: 'PolicyDsl: name, W, gridPlan{branchCount,refineCount,reason}, beta, portfolio, ranking, pruning, stopping, guidance (keep short/weak/empty), novel?' },
+          description: 'Candidate policies (do not include the incumbent; it is added automatically). Each entry is a Python source string (solve(view)) or an object: { code, name?, W? } for code policies, or a legacy PolicyDsl: { name, W, gridPlan, beta, portfolio, ranking, pruning, stopping, guidance, novel? }.',
+          items: { type: 'object', additionalProperties: true },
         },
-        sweepBetas: { type: 'array', items: { type: 'number' }, description: 'Optional deterministic beta sweep (spec §6.4)' },
+        sweepBetas: { type: 'array', items: { type: 'number' }, description: 'Optional deterministic beta sweep (spec §6.4; DSL candidates only)' },
         strictGuards: { type: 'boolean', description: 'Also disqualify degenerate policies (never batches / single branch / stops immediately)' },
       },
         output: {
-          schema: { type: 'object', additionalProperties: true, description: 'DreamReport: runId, selectedCandidate/Name/Version/Params, ranking[] with perWorld diagnostics, guards, historySize, normalization' },
+          schema: { type: 'object', additionalProperties: true, description: 'DreamReport: runId, selectedCandidate/Name/Kind/Version/Params-or-Code, ranking[] with perWorld diagnostics + trajectory digests, guards, historySize, normalization' },
           render: jsonRender,
         },
       async execute(args, exec) {
@@ -332,10 +334,12 @@ export function buildToolDefinitions(engine: DreamEngine): AnyToolDefinition[] {
 
     defineTool({
       name: 'dreamrsi_policy_set',
-      description: 'Commit an exploration policy version as active for the next online round. Either activate a previously registered version ({ version }) or register a new immutable version from a raw PolicyDsl ({ policy, notes } — parent = incumbent). The no-regression guard rejects strictly worse evaluated versions unless force: true.',
+      description: 'Commit an exploration policy version as active for the next online round. Either activate a previously registered version ({ version }), register a new legacy DSL version ({ policy, notes }), or register a new v0.2 CODE policy ({ code, name?, notes } — a Python source string defining solve(view)); the parent is always the incumbent. The no-regression guard rejects strictly worse evaluated versions unless force: true.',
       parameters: {
         version: { type: 'string', description: 'Existing version id to activate' },
-        policy: { type: 'object', additionalProperties: true, description: 'Raw PolicyDsl to register as a new version, then activate' },
+        policy: { type: 'object', additionalProperties: true, description: 'Raw legacy PolicyDsl to register as a new version, then activate' },
+        code: { type: 'string', description: 'Raw v0.2 code policy (Python source defining solve(view)) to register as a new version, then activate' },
+        name: { type: 'string', description: 'Display name for a newly registered code policy' },
         notes: { type: 'string', description: 'Rationale recorded with a newly registered policy' },
         force: { type: 'boolean', description: 'Override the no-regression guard' },
       },
@@ -363,12 +367,15 @@ export function buildToolDefinitions(engine: DreamEngine): AnyToolDefinition[] {
         render: jsonRender,
       },
       async execute(args, exec) {
-        if (args.version !== undefined && args.policy !== undefined) {
-          throw new EngineError('pass either `version` or `policy`, not both')
+        const given = [args.version !== undefined, args.policy !== undefined, args.code !== undefined].filter(Boolean).length
+        if (given > 1) {
+          throw new EngineError('pass only one of `version`, `policy`, or `code`')
         }
         return engine.policySet({
           ...(args.version !== undefined ? { version: args.version } : {}),
           ...(args.policy !== undefined ? { policy: args.policy } : {}),
+          ...(args.code !== undefined ? { code: args.code } : {}),
+          ...(args.name !== undefined ? { name: args.name } : {}),
           ...(args.notes !== undefined ? { notes: args.notes } : {}),
           ...(args.force !== undefined ? { force: args.force } : {}),
         }, { workspaceRoot: resolveWorkspace(exec).root })

@@ -94,10 +94,11 @@ describe('online rollout through the tools (spec §7.1–7.3)', () => {
   it('begin → log (batch) → log (incremental, same batchSeq) → end produces a consistent round', async () => {
     const { call, engine } = await makeHarness()
 
-    const begin = await call('dreamrsi_begin_round') as { roundId: string; policyVersion: string; policy: PolicyDsl; limits: { maxRounds: number; maxParallelism: number }; historyDigest: Record<string, unknown> }
+    const begin = await call('dreamrsi_begin_round') as { roundId: string; policyVersion: string; policyKind: 'dsl' | 'code'; policy?: PolicyDsl; policySource?: string; limits: { maxRounds: number; maxParallelism: number }; historyDigest: Record<string, unknown> }
     expect(begin.roundId).toBe('r0001')
     expect(begin.policyVersion).toBe('v0001')
-    expect(begin.policy.name).toBe('bootstrap-balanced')
+    expect(begin.policyKind).toBe('code')
+    expect(begin.policySource).toContain('def solve(view)')
     expect(begin.limits).toEqual({ maxRounds: 16, maxParallelism: 4 })
     expect(begin.historyDigest).toMatchObject({ rounds: 0, totalNodes: 0, bestScoreOverall: null })
 
@@ -130,7 +131,7 @@ describe('online rollout through the tools (spec §7.1–7.3)', () => {
     // policy.register/policy.set; assert the dreamrsi sequence itself).
     const events = await engine.store.readEvents()
     expect(events.map((event) => event.call).filter((callName) => callName.startsWith('dreamrsi_')))
-      .toEqual(['dreamrsi_begin_round', 'dreamrsi_log_decision', 'dreamrsi_log_decision', 'dreamrsi_end_round'])
+      .toEqual(['dreamrsi_begin_round', 'dreamrsi_log_decision', 'dreamrsi_log_decision', 'dreamrsi_end_round', 'dreamrsi_dream'])
   })
 
   it('rejects a second begin while a round is open, and surfaces engine errors for bad calls', async () => {
@@ -143,7 +144,7 @@ describe('online rollout through the tools (spec §7.1–7.3)', () => {
     await expect(call('dreamrsi_end_round', { roundId: 'r9999' })).rejects.toThrow(/unknown round/)
     await expect(call('dreamrsi_history', { roundId: 'r9999' })).rejects.toThrow(/unknown round/)
     await expect(call('dreamrsi_policy_get', { version: 'v9999' })).rejects.toThrow(/unknown policy version/)
-    await expect(call('dreamrsi_policy_set', { version: 'v0001', policy: makeDsl() })).rejects.toThrow(/not both/)
+    await expect(call('dreamrsi_policy_set', { version: 'v0001', policy: makeDsl() })).rejects.toThrow(/only one of/)
   })
 })
 
@@ -250,9 +251,10 @@ describe('dreaming through the tools (spec §7.5)', () => {
 describe('policy versioning through the tools (spec §7.6–7.7)', () => {
   it('policy_get returns the active bootstrap policy with its history', async () => {
     const { call } = await makeHarness()
-    const result = await call('dreamrsi_policy_get') as { activeVersion: string; policy: { version: string; params: PolicyDsl }; history: { version: string; status: string }[] }
+    const result = await call('dreamrsi_policy_get') as { activeVersion: string; policy: { version: string; kind?: string; params?: PolicyDsl; code?: string }; history: { version: string; status: string }[] }
     expect(result.activeVersion).toBe('v0001')
-    expect(result.policy.params.name).toBe('bootstrap-balanced')
+    expect(result.policy.kind).toBe('code')
+    expect(result.policy.code).toContain('def solve(view)')
     expect(result.history.map((entry) => entry.version)).toEqual(['v0001'])
     const named = await call('dreamrsi_policy_get', { version: 'v0001' }) as { policy: { version: string } }
     expect(named.policy.version).toBe('v0001')

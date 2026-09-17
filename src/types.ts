@@ -54,6 +54,56 @@ export interface PluginConfig {
   confidenceMediumTau: number
   /** RCO: similarity weight exponent γ (default 2). */
   similarityGamma: number
+  /**
+   * Policy representation engine (v0.2 F1): `'code'` (default) treats code
+   * policies — Python modules exposing `solve(view)` — as the primary
+   * representation and bootstraps fresh stores with a built-in code policy;
+   * `'legacy'` keeps the v0.1 JSON DSL interpreter primary (existing stores
+   * keep replaying). Either engine replays records of the other kind via
+   * their own runner.
+   */
+  policyEngine: 'code' | 'legacy'
+  /**
+   * When the dream loop runs (v0.2 F4). `'every-cycle'` (paper-faithful
+   * default) runs dreaming automatically after every `dreamrsi_end_round`;
+   * `'on-stagnation'` runs it when a round closes without improving the best
+   * score overall; `'off'` keeps dreaming manual.
+   */
+  autoDream: 'every-cycle' | 'on-stagnation' | 'off'
+  /**
+   * Maximum recorded steps per candidate × world trajectory digest in dream
+   * reports (v0.2 F4; default 20). Steps beyond the cap are summarized.
+   */
+  trajectoryCap: number
+  /**
+   * Wall-clock budget for ONE replay episode against a code policy
+   * (policy × world), in milliseconds (default 30000). A timed-out episode is
+   * terminated (`abort` + `terminate`) and marked invalid.
+   */
+  policyEpisodeTimeoutMs: number
+  /**
+   * Policy-development loop (v0.2 F2). `'agent-relay'` (default) keeps the
+   * DSH-native adaptation: the dream report carries trajectory digests and
+   * the HOST AGENT authors + commits candidates via `dreamrsi_policy_set`.
+   * `'host-llm'` is the paper shape: the framework itself calls the
+   * configured LLM with the verbatim Listing 2 prompt, parses `poolSize`
+   * candidate code policies from the response, and feeds them to the dream.
+   */
+  devLoop: 'host-llm' | 'agent-relay'
+  /** Candidate pool size for the host-llm development loop (default 32). */
+  poolSize: number
+  /** Maximum LLM calls per dreaming cycle (host-llm loop; default 3). */
+  maxLlmCallsPerCycle: number
+  /** Explicit LLM route override; unset → first registered provider + its first listed model. */
+  llmRoute?: { provider: string; model: string }
+  /**
+   * Replay estimator mode (v0.2 F3, paper-faithful default `'off'`):
+   * `'off'` = strictly on-manifold replay (recorded reveals only; a
+   * selection whose recorded continuation is exhausted reveals nothing);
+   * `'rco'` = §5.3 similarity-estimated outcomes for novel actions (our
+   * superset; calibration caveats documented as extension caveats).
+   */
+  estimate: 'off' | 'rco'
 }
 
 /** Schema defaults, kept in one place so `index.ts` and docs stay in sync. */
@@ -72,6 +122,14 @@ export const DEFAULT_CONFIG: Omit<PluginConfig, 'dataDir'> & { dataDir: string }
   noveltyLambda: 0.25,
   confidenceMediumTau: 0.45,
   similarityGamma: 2,
+  policyEngine: 'code',
+  autoDream: 'every-cycle',
+  trajectoryCap: 20,
+  policyEpisodeTimeoutMs: 30000,
+  devLoop: 'agent-relay',
+  poolSize: 32,
+  maxLlmCallsPerCycle: 3,
+  estimate: 'off',
 }
 
 // ---------------------------------------------------------------------------
@@ -317,6 +375,12 @@ export interface PolicyEvaluation {
 /**
  * An immutable, versioned policy (spec §2.3). The `params` payload is never
  * modified in place; only `status` and `evaluation` bookkeeping change.
+ *
+ * v0.2 F1: `kind` discriminates the representation. `'dsl'` records (the
+ * v0.1 shape, also the default for records written before the field existed)
+ * carry `params: PolicyDsl`. `'code'` records carry a Python module exposing
+ * `solve(view)`, persisted as `vNNNN.py` beside the index; `code` holds the
+ * source (hydrated from disk by the store when reading a record).
  */
 export interface PolicyRecord {
   /** e.g. "v0007". */
@@ -325,7 +389,15 @@ export interface PolicyRecord {
   status: 'candidate' | 'active' | 'retired' | 'rejected'
   /** Policy lineage: which prior version this was derived from. */
   parentId: string | null
-  params: PolicyDsl
+  kind?: 'dsl' | 'code'
+  /** Display name (code records carry it directly; DSL records use params.name). */
+  name?: string
+  /** Max parallelism declared by a code policy (defaults to the bootstrap's 4). */
+  W?: number
+  /** DSL payload (`kind: 'dsl'`, or records predating `kind`). */
+  params?: PolicyDsl
+  /** Code-policy source (`kind: 'code'`), hydrated from `vNNNN.py` on read. */
+  code?: string
   /** The proposing agent's rationale. */
   notes: string
   evaluation: PolicyEvaluation
@@ -338,6 +410,8 @@ export interface PolicyIndexEntry {
   createdAt: string
   parentId: string | null
   name: string
+  /** Policy representation; absent on records written before v0.2 (`'dsl'`). */
+  kind?: 'dsl' | 'code'
 }
 
 /** Persisted `policies/policy-index.json`. */
@@ -380,6 +454,8 @@ export interface WorldReplayResult {
   batchSizes: number[]
   /** Set when the candidate produced an illegal batch on this world. */
   invalid?: string
+  /** Compact capped step log (v0.2 F4 trajectory digest). */
+  trajectory: WorldTrajectory
 }
 
 /** Degenerate-behavior flags over the whole dream run (spec §6.3.4). */
@@ -391,12 +467,48 @@ export interface CandidateDiagnostics {
   stopsImmediately: boolean
 }
 
+/**
+ * One recorded step of a candidate's replay trajectory through one world
+ * (v0.2 F4): the compact evidence the Listing 2 policy-development payload
+ * (F2) and the dream report carry. Steps are capped per world at
+ * `config.trajectoryCap`, oldest first.
+ */
+export interface TrajectoryStep {
+  /** 1-based decision round within the episode. */
+  decisionRound: number
+  /** The selected node ids, in batch order. */
+  batch: string[]
+  /** How many of the batch elements opened a new branch (selected the root). */
+  batchRootOpens: number
+  /** How many batch elements refined an existing branch frontier. */
+  batchRefinements: number
+  /** Newly revealed nodes this step (recorded + estimated). */
+  revealCount: number
+  /** Per-step Eq. 1 term values after the reveal. */
+  terms: { quality: number; cost: number; parallelism: number }
+  /** True when every reveal this step came from the estimator. */
+  estimatedOnly: boolean
+}
+
+/** Per-world trajectory digest attached to a replay result. */
+export interface WorldTrajectory {
+  worldId: string
+  /** Steps, oldest first, capped at `config.trajectoryCap`. */
+  steps: TrajectoryStep[]
+  /** True when steps were dropped by the cap (they are summarized, not lost). */
+  truncated: boolean
+  /** Total steps the episode actually ran (≥ steps.length when truncated). */
+  totalSteps: number
+}
+
 /** One ranked candidate in the dream report (spec §6.2, §7.5). */
 export interface DreamRankingEntry {
   /** Candidate index in the submitted list (0 = incumbent). */
   candidate: number
-  /** Display name from the DSL. */
+  /** Display name from the DSL or the code-policy registration. */
   name: string
+  /** Policy representation of this candidate. */
+  kind: 'dsl' | 'code'
   /** Policy version if this candidate is a registered version, else null. */
   version: string | null
   /** V^m = mean over worlds; {@link INVALID_SCORE} stand-in when invalid. */
@@ -414,16 +526,88 @@ export interface DreamReport {
   createdAt: string
   selectedCandidate: number
   selectedName: string
+  /** Policy representation of the selected candidate. */
+  selectedKind: 'dsl' | 'code'
   /** Policy version of the selected candidate, or null when unregistered. */
   selectedVersion: string | null
-  /** The selected candidate's PolicyDsl (what the host would register next). */
-  selectedParams: PolicyDsl
+  /** The selected DSL candidate's payload (dsl candidates only). */
+  selectedParams?: PolicyDsl
+  /** The selected code candidate's Python source (code candidates only). */
+  selectedCode?: string
   ranking: DreamRankingEntry[]
   guards: { noRegression: boolean; incumbentScore: number }
   /** Number of worlds (closed trees) scored. */
   historySize: number
   /** Score normalization bounds used for Eq. 1 (nulls when normalization off/empty). */
   normalization: { min: number; max: number; enabled: boolean } | null
+}
+
+// ---------------------------------------------------------------------------
+// Code policies (v0.2 F1): the solve(view) decision contract
+// ---------------------------------------------------------------------------
+
+/** One selectable node summary in a code policy's decision view. */
+export interface PolicyViewNode {
+  id: string
+  /** Node id of the parent (the root for branch starts); null for the root. */
+  parentId: string | null
+  kind: 'root' | 'attempt'
+  /** 0 for the root; parent.depth + 1 otherwise. */
+  depth: number
+  /** -1 for the root; the branch id of the node's chain otherwise. */
+  branchId: number
+  /** 0 for a branch start; increments along the chain. */
+  seqInBranch: number
+  /** Global creation sequence within the round (recency ordering). */
+  seq: number
+  /** Recorded score (0 and unevaluated for the root). */
+  score: number
+  evaluated: boolean
+  valid: boolean
+  failClass: FailClass
+  deltaVsParent: number | null
+  deltaVsBaseline: number | null
+  /** Selectable-node count at this node's own decision time. */
+  siblingCountAtDecision: number
+  /** What the attempt at this node did (root: workspace summary). */
+  actionSummary: string
+  mechanism: string
+  tags: string[]
+  /** Free-form notes from the logging agent. */
+  notes: string
+}
+
+/**
+ * The decision view a code policy's `solve(view)` receives once per replay
+ * decision round (v0.2 F1 contract). Stateless: every call describes the
+ * full observable prefix.
+ */
+export interface PolicyView {
+  roundId: string
+  /** 1-based decision round within this episode. */
+  decisionRound: number
+  limits: { maxRounds: number; maxParallelism: number }
+  /** Root + current leaves of the observed subtree, with their summaries. */
+  selectable: PolicyViewNode[]
+  history: {
+    rounds: number
+    totalNodes: number
+    bestScoreOverall: number | null
+    bestMechanisms: string[]
+    knownDeadEnds: string[]
+    /** Recorded score scale across the pool (normalization bounds). */
+    scoreMin: number
+    scoreMax: number
+  }
+}
+
+/** What `solve(view)` must return: one legal batch selection. */
+export interface PolicyDecision {
+  /** Node ids chosen from `view.selectable`; ≤ limits.maxParallelism. */
+  batch: string[]
+  /** True ends the episode after this batch (batch still executes). */
+  stop: boolean
+  notes?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -434,7 +618,12 @@ export interface DreamReport {
 export interface BeginRoundResult {
   roundId: string
   policyVersion: string
-  policy: PolicyDsl
+  /** Policy representation of the active version. */
+  policyKind: 'dsl' | 'code'
+  /** The active DSL policy (dsl incumbents; code incumbents use policySource). */
+  policy?: PolicyDsl
+  /** The active code policy's Python source (code incumbents). */
+  policySource?: string
   limits: { maxRounds: number; maxParallelism: number }
   historyDigest: {
     rounds: number
@@ -484,6 +673,11 @@ export interface EndRoundResult {
   worldId: string
   simulator: { nodes: number; branches: number; maxDepth: number }
   activePolicyVersion: string
+  /**
+   * The dream report when `autoDream` ran the improvement stage after this
+   * round closed (v0.2 F4); `null` with a reason when it was skipped.
+   */
+  autoDream?: { report: DreamReport | null; skippedReason?: string }
 }
 
 /** `dreamrsi_history` query (spec §7.4 input). */

@@ -117,10 +117,55 @@ Set inline in the preset row (`preset/dream-rsi/agent.cordis.yml`) — every key
 | `maxReplayRounds` | `64` | K₂ — per-episode decision-round cap during replay |
 | `beta1` / `beta2` | `0.01` / `0.05` | Replay-objective (Eq. 1) cost / parallelism coefficients |
 | `normalizeScores` | `true` | Min–max score normalization across each world |
-| `maxBatchSize` | `4` | Hard batch cap (policies may set lower `W`) |
+| `policyEngine` | `'code'` | v0.2 — code policies (`solve(view)` Python modules) are primary; `'legacy'` keeps the v0.1 JSON DSL interpreter primary. Either engine replays records of both kinds |
+| `autoDream` | `'every-cycle'` | v0.2 F4 — dreaming is a mandatory stage of every cycle: `dreamrsi_end_round` runs the improvement stage automatically. `'on-stagnation'` dreams only when a round fails to improve the best score; `'off'` keeps v0.1 behavior |
+| `trajectoryCap` | `20` | Max recorded steps per candidate × world trajectory digest in dream reports (F2's Listing 2 payload) |
+| `policyEpisodeTimeoutMs` | `30000` | Wall-clock budget per replay episode against a code policy; timeout → terminate + episode invalid |
+| `devLoop` | `'agent-relay'` | v0.2 F2 — policy-development loop. `'agent-relay'`: the dream report carries trajectory digests and the HOST AGENT authors + commits candidates (`dreamrsi_policy_set { code }`). `'host-llm'`: the framework calls the configured LLM with the verbatim Listing 2 prompt + trajectory payload and replays the parsed candidates (paper shape; needs a composed `ctx.llm` route, fail-soft to agent-relay without one) |
+| `poolSize` | `32` | Candidate pool size the host-llm loop generates per cycle |
+| `maxLlmCallsPerCycle` | `3` | LLM call budget per dreaming cycle (host-llm loop) |
+| `llmRoute` | — | Explicit `{ provider, model }` override; unset → the deployment's default route (first registered provider + first listed model) |
 | `similarityThreshold`, `similarityTemperature`, `similarityGamma` | `0.35` / `0.25` / `2` | RCO estimator similarity shaping |
 | `estimatorMaxAnalogues` / `estimatorMinAnalogues` | `5` / `3` | Top-k recorded analogues blended for novel-action estimates |
 | `similarityFloor`, `hallucinationTau`, `noveltyLambda`, `confidenceMediumTau` | `0.1` / `0.18` / `0.25` / `0.45` | Novelty penalty, abstention prior, confidence thresholds |
+
+## Code policies (v0.2)
+
+Policies are **Python modules** exposing the paper's shared decision interface:
+
+```python
+def solve(view: dict) -> dict:
+    """
+    view: { roundId, decisionRound, limits: {maxRounds K1, maxParallelism W},
+            selectable: [node summaries — root + current leaves, with state,
+                         action history, scores, deltas, sibling counts],
+            history: { rounds, totalNodes, bestScoreOverall, bestMechanisms,
+                       knownDeadEnds, score scale } }
+    returns: { batch: [nodeId, ...] (<= W, legal), stop: bool, notes: str }
+    """
+```
+
+- **Execution** runs through the harness's `ctx.subprocess` seam: `python -I`
+  (isolated interpreter, scrubbed env, argv never shell-interpreted) with
+  piped stdin/stdout carrying the JSON-lines decision protocol — the engine
+  sends the tree view each decision round, the policy answers a batch, and
+  the engine reveals recorded children per the paper's `Child()` rules.
+  **One subprocess per candidate**; every world of a dream run executes
+  inside that one process (perf gate: 32 candidates × 10 worlds ≈ 6.4 s on
+  the dev laptop — `bench/perf-gate.ts`).
+- **Sandbox posture**: per-episode timeout (config `policyEpisodeTimeoutMs`,
+  abort + `terminate()`), isolated interpreter, no harness state on the wire.
+  Policy code is trusted configuration (the same trust that justifies preset
+  compositions); the documented residual risk is that an ordinary spawn is
+  not a filesystem/network jail on Windows.
+- **Bootstrap**: fresh stores ship `policies/v0001.py` — a deterministic port
+  of the v0.1 `bootstrap-balanced` DSL (W=4, grid 3×3, beta 0.6, portfolio
+  0.5/0.5 + 1 recovery) — so every store starts paper-shaped.
+- **Legacy coexistence**: policy records carry `kind: 'dsl' | 'code'`; the
+  v0.1 JSON-DSL interpreter remains for existing stores
+  (`policyEngine: 'legacy'`), and both representations replay through the
+  same Eq. 1 scoring, batch validation (≤ W, selectable-only, no
+  parent+child), and selection guards.
 
 ## Data model
 
@@ -129,9 +174,11 @@ Set inline in the preset row (`preset/dream-rsi/agent.cordis.yml`) — every key
   config.json                 # effective plugin config
   trees/<roundId>/nodes.jsonl # discovery tree: one immutable record per attempt
   trees/<roundId>/round.json  # round metadata (policy version, status, stats)
-  policies/policy-index.json  # version index + active pointer
-  policies/vNNNN.json         # immutable PolicyDsl versions
-  dreams/dNNNN.json           # dreaming runs: candidates, per-world scores, selection
+  policies/policy-index.json  # version index (kind: dsl|code) + active pointer
+  policies/vNNNN.json         # immutable policy records (lineage + evaluation)
+  policies/vNNNN.py           # v0.2 code policies: Python solve(view) sources
+  policies/.runner.py         # shipped JSON-lines runner for code policies
+  dreams/dNNNN.json           # dreaming runs: candidates, per-world scores, trajectories, selection
   events.jsonl                # append-only audit log of every mutation
 ```
 
@@ -141,18 +188,22 @@ Node records are full `(state, action, outcome)` tuples with lineage. Trees are 
 
 ```
 src/
-  index.ts     Cordis plugin: name/inject/apply, Schemastery config, wiring
-  types.ts     Domain types (NodeRecord, RoundRecord, PolicyDsl, ...)
-  store.ts     .dreamrsi/ persistence, tree invariants, policy registry
+  index.ts     Cordis plugin: name/inject(['tools','subprocess'])/apply, Schemastery config, wiring
+  types.ts     Domain types (NodeRecord, RoundRecord, PolicyView, PolicyRecord{kind}, ...)
+  store.ts     .dreamrsi/ persistence, tree invariants, policy registry (dsl + code)
   replay.ts    ReplayWorld: Child() reveal rules, RCO off-policy estimator
-  dreaming.ts  PolicyDsl validation + interpreter, Eq. 1 dream loop, selection
-  engine.ts    Facade: begin/log/end/history/dream/policy operations
+  dreaming.ts  DSL validation + legacy interpreter, code-policy drivers, Eq. 1 dream loop, selection
+  policy-runtime.ts  v0.2 F1: python -I JSON-lines policy subprocess (spawn/timeout/malformed handling)
+  bootstrap-policy.ts Built-in bootstrap code policy (v0001.py source) + the runner source
+  engine.ts    Facade: begin/log/end (autoDream)/history/dream/policy operations
   tools.ts     The seven model-facing tool definitions
   dsh-ambient.d.ts  Type-only mirrors of the DSH runtime surfaces (standalone typecheck)
+bench/perf-gate.ts  v0.2 F4 scale gate (poolSize × worlds wall-time)
 preset/dream-rsi/   The agent preset (full standard assembly + the plugin row + workflow persona)
 tests/              Vitest suite (engine, tools, preset shape, per-workspace isolation,
-                    real-validator regression fence)
+                    code-policy protocol, real-validator regression fence)
 docs/DREAM-RSI-SPEC.md   Implementation-grade spec distilled from the paper
+docs/ROADMAP-v0.2.md     The v0.2 paper-faithful upgrade proposal (F1–F4)
 ```
 
 The package typechecks **standalone** (ambient type mirrors stand in for `@deepseek-ai/cordis`, `@deepseek-ai/dsh-tools`, `@deepseek-ai/schemastery`); inside DSH the real modules supply the runtime.

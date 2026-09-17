@@ -1,13 +1,16 @@
 /**
- * Dreaming-based policy improvement (spec §6): PolicyDsl validation, the
- * deterministic policy interpreter, the replay-scoring dream loop (Eq. 1 with
- * the §5.3 batch-diversity parallelism term), and selection with
+ * Dreaming-based policy improvement (spec §6): candidate validation, the
+ * legacy JSON-DSL policy interpreter (retained behind `policyEngine`), the
+ * v0.2 code-policy subprocess drivers, the replay-scoring dream loop (Eq. 1
+ * with the §5.3 batch-diversity parallelism term), and selection with
  * no-regression guards.
  *
- * The policy-development agent is the CALLING model, never this plugin: the
- * plugin only validates, interprets, scores, and reports. Everything here is
- * deterministic — identical inputs (same worlds, candidate DSLs, config)
- * produce byte-identical reports.
+ * Two policy representations coexist: v0.2 **code policies** (Python modules
+ * exposing `solve(view)`, driven over `ctx.subprocess` JSON lines — one
+ * subprocess per candidate, every world inside it) and the v0.1 **DSL**
+ * interpreter (legacy stores keep replaying). Selection invariants and Eq. 1
+ * scoring are shared; engine-side batch validation (≤ W, selectable-only, no
+ * parent+child) is identical for both.
  *
  * @module
  */
@@ -28,7 +31,8 @@ import {
   type ReplayWorld,
   type StructuralAnchor,
 } from './replay.ts'
-import { FAIL_CLASSES, type DreamRankingEntry, type DreamReport, type FailClass, type NodeRecord, type PluginConfig, type PolicyDsl, type Reveal, type ReplayStopReason, type WorldReplayResult } from './types.ts'
+import { startPolicyProcess, type SubprocessService } from './policy-runtime.ts'
+import { FAIL_CLASSES, type DreamRankingEntry, type DreamReport, type FailClass, type NodeRecord, type PluginConfig, type PolicyDsl, type PolicyView, type Reveal, type ReplayStopReason, type TrajectoryStep, type WorldReplayResult } from './types.ts'
 
 /** Score assigned to candidates that produced an illegal batch or invalid DSL. */
 export const INVALID_SCORE = -1e12
@@ -463,55 +467,184 @@ function observedBranchCount(revealed: ReadonlyMap<string, Reveal>): number {
 // Dream loop (spec §6.2 pseudocode) and selection (§6.3)
 // ---------------------------------------------------------------------------
 
+/** One dream candidate: a legacy JSON DSL or a v0.2 code policy. */
+export type DreamCandidate =
+  | { kind: 'dsl'; dsl: PolicyDsl; version: string | null }
+  | { kind: 'code'; code: string; name: string; W: number; version: string | null }
+
+/** Subprocess resources the code-policy drivers need (absent → code candidates run invalid). */
+export interface CodePolicyRuntime {
+  subprocess: SubprocessService
+  /** Absolute path of the shipped runner (`policies/.runner.py`). */
+  runnerPath: string
+  /** Absolute directory the policy processes run in (the store's policies dir). */
+  policyDir: string
+  /** Absolute path resolver for one candidate's source file. */
+  policyPathFor: (index: number) => string
+  /** Wall-clock budget per episode (policy × world). */
+  episodeTimeoutMs: number
+  /** Cumulative history digest surfacing in every policy view. */
+  historyDigest: DreamInput['historyDigest']
+  /** Score normalization bounds surfacing in every policy view. */
+  scoreScale: { min: number; max: number }
+  signal?: AbortSignal
+}
+
 /** Inputs to {@link runDream}. */
 export interface DreamInput {
   /** Candidate list; candidate 0 MUST be the incumbent (engine prepends it). */
-  candidates: readonly { dsl: PolicyDsl; version: string | null }[]
+  candidates: readonly DreamCandidate[]
   /** The whole simulator pool (every closed tree). */
   worlds: readonly ReplayWorld[]
   config: PluginConfig
   runId: string
   createdAt: string
-  /** Optional deterministic beta sweep (spec §6.4). */
+  /** Optional deterministic beta sweep (spec §6.4; DSL candidates only). */
   sweepBetas: readonly number[]
   /** Disqualify degenerate-behavior flags (spec §6.3.4) when true. */
   strictGuards: boolean
+  /** Code-policy subprocess resources (code candidates run invalid without them). */
+  runtime?: CodePolicyRuntime
+  /** Cumulative history digest surfacing in every policy view. */
+  historyDigest: {
+    rounds: number
+    totalNodes: number
+    bestScoreOverall: number | null
+    bestMechanisms: string[]
+    knownDeadEnds: string[]
+  }
 }
 
-/** Per-world replay episode for one policy. */
-function replayWorld(
-  dsl: PolicyDsl,
+/**
+ * Build the stateless `solve(view)` decision view for one replay decision
+ * round (v0.2 F1 contract): the root + current leaves of the observed
+ * subtree, with per-node summaries and the cumulative history digest.
+ */
+export function buildPolicyView(
+  world: ReplayWorld,
+  observed: ReadonlyMap<string, Reveal>,
+  decisionRound: number,
+  limits: { maxRounds: number; maxParallelism: number },
+  historyDigest: DreamInput['historyDigest'],
+  scoreScale: { min: number; max: number },
+): PolicyView {
+  const selectable = []
+  for (const reveal of observed.values()) {
+    const node = reveal.node
+    const isLeaf = node.kind === 'root' || !hasRevealedChild(world, observed, node.id)
+    if (!isLeaf) continue
+    selectable.push({
+      id: node.id,
+      parentId: node.parentId,
+      kind: node.kind,
+      depth: node.state.depth,
+      branchId: node.state.branchId,
+      seqInBranch: node.state.seqInBranch,
+      seq: node.lineage.seq,
+      score: node.outcome.score,
+      evaluated: node.outcome.evaluated,
+      valid: node.outcome.valid,
+      failClass: node.outcome.failClass,
+      deltaVsParent: node.outcome.deltaVsParent,
+      deltaVsBaseline: node.outcome.deltaVsBaseline,
+      siblingCountAtDecision: node.state.siblingCountAtDecision,
+      actionSummary: node.action.summary,
+      mechanism: node.action.mechanism,
+      tags: [...node.action.tags],
+      notes: node.notes,
+    })
+  }
+  selectable.sort((a, b) => a.id.localeCompare(b.id))
+  return {
+    roundId: world.worldId,
+    decisionRound,
+    limits: { ...limits },
+    selectable,
+    history: {
+      rounds: historyDigest.rounds,
+      totalNodes: historyDigest.totalNodes,
+      bestScoreOverall: historyDigest.bestScoreOverall,
+      bestMechanisms: [...historyDigest.bestMechanisms],
+      knownDeadEnds: [...historyDigest.knownDeadEnds],
+      scoreMin: scoreScale.min,
+      scoreMax: scoreScale.max,
+    },
+  }
+}
+
+/** Whether the observed prefix already contains a child of this node. */
+function hasRevealedChild(world: ReplayWorld, observed: ReadonlyMap<string, Reveal>, nodeId: string): boolean {
+  const childId = world.childOf.get(nodeId)
+  return childId !== undefined && observed.has(childId)
+}
+
+/** Per-world replay episode for one policy driver. */
+async function replayWorldWithDriver(
+  driver: PolicyDriver,
   world: ReplayWorld,
   pool: readonly ReplayWorld[],
   config: PluginConfig,
   normalization: Normalization,
-): { result: WorldReplayResult; openedBranches: number; allBatches: number[]; estCount: number; reveals: number } {
+): Promise<{ result: WorldReplayResult; openedBranches: number; allBatches: number[]; estCount: number; reveals: number }> {
   const observed = initObserved(world)
-  const est: EstimateContext = { world, pool, config, dsl }
-  const capK = Math.min(config.maxReplayRounds, dsl.stopping.maxRoundsK2)
+  // v0.2 F3: RCO estimation is gated by config.estimate ('off' = paper
+  // default, strictly on-manifold). Code candidates have no gridPlan, so the
+  // estimator context is DSL-only; code candidates always replay strictly
+  // on-manifold (novel selections reveal nothing → exhaustion semantics).
+  const est: EstimateContext | null = driver.kind === 'dsl'
+    ? { world, pool, config, dsl: driver.dsl, estimate: config.estimate }
+    : null
+  const capK = Math.min(config.maxReplayRounds, driver.episodeCap)
   let invalid: string | null = null
   let stopReason: ReplayStopReason = 'round-cap'
   const batchSizes: number[] = []
   const diversityItems: { descriptor: ActionDescriptor; anchor: StructuralAnchor }[] = []
+  const trajectory: TrajectoryStep[] = []
+  let trajectoryTruncated = false
+  let totalSteps = 0
 
   while (observed.rounds < capK && !isExhausted(world, observed)) {
-    const batch = selectBatch(dsl, world, observed.revealed)
+    const selection = await driver.select(world, observed.revealed, observed.rounds + 1)
+    if ('invalid' in selection) {
+      invalid = selection.invalid
+      stopReason = 'invalid'
+      break
+    }
+    const batch = 'stop' in selection ? [] : selection.batch
     if (batch.length === 0) {
       stopReason = 'empty-batch'
       break
     }
-    const violation = checkBatchRecords(world, observed, batch, dsl.W)
+    const violation = checkBatchRecords(world, observed, batch, driver.width)
     if (violation !== null) {
       invalid = violation
       stopReason = 'invalid'
       break
     }
+    // Paper action space (v0.2 F-a ENFORCED): every batch id must be a
+    // SELECTABLE node of the current observed prefix (root + current leaves)
+    // that is RECORDED in this world. Unknown or non-selectable ids are an
+    // illegal batch (−∞), not silently skipped — the replay action space is
+    // the recorded tree.
+    const selectableIds = new Set<string>()
+    for (const reveal of observed.revealed.values()) {
+      const node = reveal.node
+      if (node.kind === 'root' || !hasRevealedChild(world, observed.revealed, node.id)) selectableIds.add(node.id)
+    }
+    const offActionSpace = batch.filter((id) => !selectableIds.has(id) || !world.nodeById.has(id))
+    if (offActionSpace.length > 0) {
+      invalid = `batch ids outside the replay action space: ${offActionSpace.join(', ')}`
+      stopReason = 'invalid'
+      break
+    }
     // Diversity items describe the selected probes BEFORE their outcomes exist.
     diversityItems.length = 0
+    let rootOpens = 0
     for (const nodeId of batch) {
       const reveal = observed.revealed.get(nodeId)
       if (!reveal) continue
       const node = reveal.node
+      if (node.kind === 'root') rootOpens += 1
       const role: BranchRole = node.kind === 'root' || node.parentId === world.rootId ? 'root-open' : 'refine'
       diversityItems.push({
         descriptor: node.kind === 'root'
@@ -525,6 +658,27 @@ function replayWorld(
     commitReveals(observed, batch, revealed)
     observed.bonusNum += batch.length * Math.sqrt(diversity)
     batchSizes.push(batch.length)
+    totalSteps += 1
+
+    // Trajectory digest step (v0.2 F4): compact, capped, oldest first.
+    const stepTerms = {
+      quality: observed.bestQuality !== null ? normalizeScore(normalization, observed.bestQuality) : 0,
+      cost: config.beta1 * observed.reveals,
+      parallelism: config.beta2 * observed.bonusNum / Math.max(1, observed.rounds),
+    }
+    if (trajectory.length < config.trajectoryCap) {
+      trajectory.push({
+        decisionRound: observed.rounds,
+        batch: [...batch],
+        batchRootOpens: rootOpens,
+        batchRefinements: batch.length - rootOpens,
+        revealCount: revealed.length,
+        terms: stepTerms,
+        estimatedOnly: revealed.length > 0 && revealed.every((reveal) => reveal.estimated),
+      })
+    } else {
+      trajectoryTruncated = true
+    }
   }
   if (invalid === null && isExhausted(world, observed)) stopReason = 'exhausted'
 
@@ -541,6 +695,7 @@ function replayWorld(
     terms: { quality, cost, parallelism },
     estOutcomeFraction: observed.reveals > 0 ? observed.estCount / observed.reveals : 0,
     batchSizes,
+    trajectory: { worldId: world.worldId, steps: trajectory, truncated: trajectoryTruncated, totalSteps },
     ...(invalid !== null ? { invalid } : {}),
   }
   return {
@@ -552,13 +707,31 @@ function replayWorld(
   }
 }
 
-/** Score one candidate over the whole pool (single beta). */
-function scoreCandidate(
-  dsl: PolicyDsl,
+/** One candidate's batch-selection driver: legacy DSL interpreter or code subprocess. */
+type PolicyDriver =
+  | {
+    kind: 'dsl'
+    dsl: PolicyDsl
+    width: number
+    episodeCap: number
+    select(world: ReplayWorld, observed: ReadonlyMap<string, Reveal>, decisionRound: number): Promise<{ batch: string[] } | { stop: true } | { invalid: string }>
+    dispose(): Promise<void>
+  }
+  | {
+    kind: 'code'
+    width: number
+    episodeCap: number
+    select(world: ReplayWorld, observed: ReadonlyMap<string, Reveal>, decisionRound: number): Promise<{ batch: string[] } | { stop: true } | { invalid: string }>
+    dispose(): Promise<void>
+  }
+
+/** Score one candidate driver over the whole pool (single beta). */
+async function scoreCandidate(
+  driver: PolicyDriver,
   worlds: readonly ReplayWorld[],
   config: PluginConfig,
   normalization: Normalization,
-): { perWorld: WorldReplayResult[]; diagnostics: { estCount: number; reveals: number; neverBatched: boolean; singleBranch: boolean; stopsImmediately: boolean; batchSizes: number[] } } {
+): Promise<{ perWorld: WorldReplayResult[]; diagnostics: { estCount: number; reveals: number; neverBatched: boolean; singleBranch: boolean; stopsImmediately: boolean; batchSizes: number[] } }> {
   const perWorld: WorldReplayResult[] = []
   let estTotal = 0
   let revealsTotal = 0
@@ -567,7 +740,9 @@ function scoreCandidate(
   let allStoppedImmediately = worlds.length > 0
   const batchSizes: number[] = []
   for (const world of worlds) {
-    const { result, openedBranches, allBatches, estCount, reveals } = replayWorld(dsl, world, worlds, config, normalization)
+    const { result, openedBranches, allBatches, estCount, reveals } = await replayWorldWithDriver(
+      driver, world, worlds, config, normalization,
+    )
     perWorld.push(result)
     estTotal += estCount
     revealsTotal += reveals
@@ -590,27 +765,132 @@ function scoreCandidate(
   }
 }
 
+/** Build the batch-selection driver for one candidate (DSL interpreter or code subprocess). */
+function driverFor(
+  candidate: DreamCandidate,
+  config: PluginConfig,
+  runtime: CodePolicyRuntime | undefined,
+  candidateIndex: number,
+): { driver: PolicyDriver; invalid?: string } {
+  if (candidate.kind === 'dsl') {
+    return {
+      driver: {
+        kind: 'dsl',
+        dsl: candidate.dsl,
+        width: candidate.dsl.W,
+        episodeCap: candidate.dsl.stopping.maxRoundsK2,
+        async select(world, observed) {
+          return { batch: selectBatch(candidate.dsl, world, observed) }
+        },
+        async dispose() {},
+      },
+    }
+  }
+  if (runtime === undefined) {
+    // DSL candidates never reach here (their branch returns above), so the
+    // unavailable-runtime shape is always the code one.
+    return {
+      driver: emptyDriver('code', candidate.W, 0),
+      invalid: 'no subprocess runtime available for code policies',
+    }
+  }
+  const process = startPolicyProcess({
+    subprocess: runtime.subprocess,
+    runnerPath: runtime.runnerPath,
+    policyPath: runtime.policyPathFor(candidateIndex),
+    cwd: runtime.policyDir,
+    episodeTimeoutMs: runtime.episodeTimeoutMs,
+    ...(runtime.signal !== undefined ? { signal: runtime.signal } : {}),
+  })
+  return {
+    driver: {
+      kind: 'code',
+      width: candidate.W,
+      episodeCap: config.maxReplayRounds,
+      async select(world, observed, decisionRound) {
+        const view = buildPolicyView(
+          world,
+          observed,
+          decisionRound,
+          { maxRounds: config.maxReplayRounds, maxParallelism: candidate.W },
+          runtime.historyDigest,
+          runtime.scoreScale,
+        )
+        const answer = await process.ask(view)
+        if (answer.kind === 'invalid') return { invalid: answer.reason }
+        if (answer.decision.stop) return { stop: true }
+        return { batch: answer.decision.batch }
+      },
+      async dispose() {
+        await process.dispose()
+      },
+    },
+  }
+}
+
+/** A driver whose every selection fails: used when the subprocess seam is unavailable. */
+function emptyDriver(kind: 'dsl' | 'code', width: number, episodeCap: number): PolicyDriver {
+  const reason = kind === 'code' ? 'code policy could not start: no subprocess runtime' : 'driver unavailable'
+  return {
+    kind,
+    width,
+    episodeCap,
+    async select() {
+      return { invalid: reason }
+    },
+    async dispose() {},
+  } as PolicyDriver
+}
+
 /**
- * Run the full dreaming phase: validate candidates, replay-score each over
- * every world (Eq. 1 + §5.3 step 5), apply the optional beta sweep, and rank
- * with the §6.3 guards. Candidate 0 is the incumbent; ties select the
+ * Run the full dreaming phase: replay-score each candidate over every world
+ * (Eq. 1 + §5.3 step 5), apply the optional beta sweep (DSL candidates), and
+ * rank with the §6.3 guards. Candidate 0 is the incumbent; ties select the
  * earliest candidate, so selection can never regress on the replay history.
+ * Code candidates run in ONE subprocess per candidate with every world inside
+ * it (v0.2 F1); a missing subprocess runtime or a failing policy invalidates
+ * the candidate (never the run).
  */
-export function runDream(input: DreamInput): DreamReport {
-  const { candidates, worlds, config, runId, createdAt, sweepBetas, strictGuards } = input
+export async function runDream(input: DreamInput): Promise<DreamReport> {
+  const { candidates, worlds, config, runId, createdAt, sweepBetas, strictGuards, runtime } = input
   const normalization = computeNormalization(worlds, config.normalizeScores)
   const ranking: DreamRankingEntry[] = []
 
-  candidates.forEach((candidate, index) => {
-    const validation = validatePolicyDsl(candidate.dsl)
-    if (!validation.ok) {
+  for (const [index, candidate] of candidates.entries()) {
+    const name = candidate.kind === 'dsl' ? candidate.dsl.name : candidate.name
+    if (candidate.kind === 'dsl') {
+      const validation = validatePolicyDsl(candidate.dsl)
+      if (!validation.ok) {
+        ranking.push({
+          candidate: index,
+          name,
+          kind: 'dsl',
+          version: candidate.version,
+          meanScore: INVALID_SCORE,
+          perWorld: [],
+          invalid: `invalid PolicyDsl: ${validation.errors.join('; ')}`,
+          diagnostics: {
+            batchSizes: [],
+            estOutcomeFraction: 0,
+            neverBatched: true,
+            singleBranch: true,
+            stopsImmediately: true,
+          },
+        })
+        continue
+      }
+    }
+
+    const { driver, invalid: driverInvalid } = driverFor(candidate, config, runtime, index)
+    if (driverInvalid !== undefined) {
       ranking.push({
         candidate: index,
-        name: typeof candidate.dsl?.name === 'string' ? candidate.dsl.name : `candidate-${index}`,
+        name,
+        kind: candidate.kind,
         version: candidate.version,
         meanScore: INVALID_SCORE,
         perWorld: [],
-        invalid: `invalid PolicyDsl: ${validation.errors.join('; ')}`,
+        invalid: driverInvalid,
         diagnostics: {
           batchSizes: [],
           estOutcomeFraction: 0,
@@ -619,68 +899,77 @@ export function runDream(input: DreamInput): DreamReport {
           stopsImmediately: true,
         },
       })
-      return
+      await driver.dispose()
+      continue
     }
-    const { perWorld, diagnostics } = scoreCandidate(candidate.dsl, worlds, config, normalization)
-    const worldScores = perWorld.map((result) => result.score)
-    const anyInvalid = perWorld.find((result) => result.invalid !== undefined)
 
-    // Validity + degeneracy gate (spec §6.3.3/§6.3.4): an illegal batch, an
-    // invalid DSL, or — under strictGuards — a degenerate behavior profile
-    // (never batches / single branch / stops immediately everywhere) scores
-    // INVALID_SCORE, so selection's argmax can never pick it.
-    const degenerate = diagnostics.neverBatched || diagnostics.singleBranch || diagnostics.stopsImmediately
-    const invalidReason = anyInvalid !== undefined
-      ? anyInvalid.invalid ?? 'illegal batch'
-      : strictGuards && degenerate
-        ? `degenerate behavior: ${[
-          diagnostics.neverBatched ? 'never-batched' : null,
-          diagnostics.singleBranch ? 'single-branch' : null,
-          diagnostics.stopsImmediately ? 'stops-immediately' : null,
-        ].filter(Boolean).join(', ')}`
-        : null
-    const meanScore = invalidReason !== null
-      ? INVALID_SCORE
-      : worldScores.length > 0
-        ? worldScores.reduce((sum, score) => sum + score, 0) / worldScores.length
-        : 0
+    try {
+      const { perWorld, diagnostics } = await scoreCandidate(driver, worlds, config, normalization)
+      const worldScores = perWorld.map((result) => result.score)
+      const anyInvalid = perWorld.find((result) => result.invalid !== undefined)
 
-    // Optional deterministic beta sweep (spec §6.4): re-score the SAME
-    // candidate at each sweep beta; the frontier informs the proposer's next
-    // baked-in default beta.
-    let betaSweep: { beta: number; reward: number }[] | null = null
-    if (sweepBetas.length > 0) {
-      betaSweep = sweepBetas.map((beta) => {
-        const swept: PolicyDsl = { ...candidate.dsl, beta }
-        const sweptRun = scoreCandidate(swept, worlds, config, normalization)
-        const scores = sweptRun.perWorld.map((result) => result.score)
-        const sweptInvalid = sweptRun.perWorld.find((result) => result.invalid !== undefined)
-        return {
-          beta,
-          reward: sweptInvalid !== undefined || scores.length === 0
-            ? INVALID_SCORE
-            : scores.reduce((sum, score) => sum + score, 0) / scores.length,
-        }
+      // Validity + degeneracy gate (spec §6.3.3/§6.3.4): an illegal batch, a
+      // failing policy, or — under strictGuards — a degenerate behavior
+      // profile (never batches / single branch / stops immediately everywhere)
+      // scores INVALID_SCORE, so selection's argmax can never pick it.
+      const degenerate = diagnostics.neverBatched || diagnostics.singleBranch || diagnostics.stopsImmediately
+      const invalidReason = anyInvalid !== undefined
+        ? anyInvalid.invalid ?? 'illegal batch'
+        : strictGuards && degenerate
+          ? `degenerate behavior: ${[
+            diagnostics.neverBatched ? 'never-batched' : null,
+            diagnostics.singleBranch ? 'single-branch' : null,
+            diagnostics.stopsImmediately ? 'stops-immediately' : null,
+          ].filter(Boolean).join(', ')}`
+          : null
+      const meanScore = invalidReason !== null
+        ? INVALID_SCORE
+        : worldScores.length > 0
+          ? worldScores.reduce((sum, score) => sum + score, 0) / worldScores.length
+          : 0
+
+      // Optional deterministic beta sweep (spec §6.4): DSL candidates only —
+      // beta is internal to a code policy, so a sweep has no lever there.
+      let betaSweep: { beta: number; reward: number }[] | null = null
+      if (sweepBetas.length > 0 && candidate.kind === 'dsl') {
+        const sweepPromises = sweepBetas.map((beta) => {
+          const swept: PolicyDsl = { ...candidate.dsl, beta }
+          const sweptDriver = driverFor({ kind: 'dsl', dsl: swept, version: candidate.version }, config, runtime, index)
+          return scoreCandidate(sweptDriver.driver, worlds, config, normalization).then((sweptRun) => {
+            const scores = sweptRun.perWorld.map((result) => result.score)
+            const sweptInvalid = sweptRun.perWorld.find((result) => result.invalid !== undefined)
+            return {
+              beta,
+              reward: sweptInvalid !== undefined || scores.length === 0
+                ? INVALID_SCORE
+                : scores.reduce((sum, score) => sum + score, 0) / scores.length,
+            }
+          })
+        })
+        betaSweep = await Promise.all(sweepPromises)
+      }
+
+      ranking.push({
+        candidate: index,
+        name,
+        kind: candidate.kind,
+        version: candidate.version,
+        meanScore,
+        perWorld,
+        invalid: invalidReason,
+        diagnostics: {
+          batchSizes: diagnostics.batchSizes,
+          estOutcomeFraction: diagnostics.reveals > 0 ? diagnostics.estCount / diagnostics.reveals : 0,
+          neverBatched: diagnostics.neverBatched,
+          singleBranch: diagnostics.singleBranch,
+          stopsImmediately: diagnostics.stopsImmediately,
+        },
+        ...(betaSweep !== null ? { betaSweep } : {}),
       })
+    } finally {
+      await driver.dispose()
     }
-
-    ranking.push({
-      candidate: index,
-      name: candidate.dsl.name,
-      version: candidate.version,
-      meanScore,
-      perWorld,
-      invalid: invalidReason,
-      diagnostics: {
-        batchSizes: diagnostics.batchSizes,
-        estOutcomeFraction: diagnostics.reveals > 0 ? diagnostics.estCount / diagnostics.reveals : 0,
-        neverBatched: diagnostics.neverBatched,
-        singleBranch: diagnostics.singleBranch,
-        stopsImmediately: diagnostics.stopsImmediately,
-      },
-      ...(betaSweep !== null ? { betaSweep } : {}),
-    })
-  })
+  }
 
   // --- selection (§6.3): argmax mean score; ties → earliest candidate. ---
   const ordering = [...ranking].sort((a, b) => {
@@ -693,14 +982,18 @@ export function runDream(input: DreamInput): DreamReport {
   const selectedScore = selected?.meanScore ?? INVALID_SCORE
   const incumbentScore = incumbent?.meanScore ?? INVALID_SCORE
   const noRegression = selectedScore >= incumbentScore - 1e-9
+  const selectedCandidate = selected?.candidate ?? 0
+  const selectedDreamCandidate = candidates[selectedCandidate]
 
   return {
     runId,
     createdAt,
-    selectedCandidate: selected?.candidate ?? 0,
+    selectedCandidate,
     selectedName: selected?.name ?? 'unknown',
+    selectedKind: selected?.kind ?? 'dsl',
     selectedVersion: selected?.version ?? null,
-    selectedParams: candidates[selected?.candidate ?? 0]?.dsl ?? ({} as PolicyDsl),
+    ...(selectedDreamCandidate?.kind === 'dsl' ? { selectedParams: selectedDreamCandidate.dsl } : {}),
+    ...(selectedDreamCandidate?.kind === 'code' ? { selectedCode: selectedDreamCandidate.code } : {}),
     ranking,
     guards: { noRegression, incumbentScore },
     historySize: worlds.length,

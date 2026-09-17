@@ -359,7 +359,7 @@ describe('DreamStore — policy registry', () => {
     expect(v2.parentId).toBe('v0001')
     expect(v1.status).toBe('candidate')
     expect(v1.evaluation).toEqual({ meanReplayScore: null, perWorldScores: null, betaSweep: null })
-    expect((await store.getPolicy('v0002'))?.params.name).toBe('variant')
+    expect((await store.getPolicy('v0002'))?.params?.name).toBe('variant')
     expect(await store.getPolicy('v9999')).toBeNull()
     expect((await store.listPolicyEntries()).map((entry) => entry.version)).toEqual(['v0001', 'v0002'])
   })

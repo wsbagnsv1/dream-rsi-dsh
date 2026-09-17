@@ -80,6 +80,13 @@ export const Config: Schema<PluginConfig> = Schema.object({
   autoDream: Schema.union(['every-cycle', 'on-stagnation', 'off'] as const).default(DEFAULT_CONFIG.autoDream),
   trajectoryCap: Schema.number().default(DEFAULT_CONFIG.trajectoryCap),
   policyEpisodeTimeoutMs: Schema.number().default(DEFAULT_CONFIG.policyEpisodeTimeoutMs),
+  devLoop: Schema.union(['host-llm', 'agent-relay'] as const).default(DEFAULT_CONFIG.devLoop),
+  poolSize: Schema.number().default(DEFAULT_CONFIG.poolSize),
+  maxLlmCallsPerCycle: Schema.number().default(DEFAULT_CONFIG.maxLlmCallsPerCycle),
+  llmRoute: Schema.object({
+    provider: Schema.string(),
+    model: Schema.string(),
+  }).default(undefined as unknown as { provider: string; model: string }),
 })
 
 /** Default workspace root when a tool call carries no session workspace. */

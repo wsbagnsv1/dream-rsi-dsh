@@ -19,10 +19,11 @@
 import * as path from 'node:path'
 import { rm, writeFile } from 'node:fs/promises'
 import { BOOTSTRAP_POLICY_SOURCE } from './bootstrap-policy.ts'
+import { ADAPTER_PREAMBLE, LISTING2_PROMPT, parseCandidateSources, renderPayload, type Listing2Payload } from './dev-loop.ts'
 import { runDream, defaultPolicyDsl, validatePolicyDsl, type CodePolicyRuntime, type DreamCandidate } from './dreaming.ts'
 import { buildWorld, computeNormalization, type ReplayWorld } from './replay.ts'
 import { DreamStore, StoreError, runnerPathOf, type DreamStoreReport } from './store.ts'
-import type { SubprocessService } from './policy-runtime.ts'
+import type { LlmRuntime, SubprocessService } from './policy-runtime.ts'
 import type {
   BeginRoundResult,
   DecisionInput,
@@ -105,6 +106,12 @@ export interface DreamEngineOptions {
    * without it, code candidates replay as invalid while everything else works.
    */
   subprocess?: SubprocessService
+  /**
+   * The `ctx.llm` seam for the v0.2 F2 host-llm development loop. Optional
+   * (fail-soft `ctx.get('llm')`): without it the loop falls back to
+   * `devLoop: 'agent-relay'` regardless of config.
+   */
+  llm?: LlmRuntime
 }
 
 /** Per-workspace engine state, memoized by resolved root. */
@@ -114,6 +121,11 @@ interface WorkspaceState {
   worlds: Map<string, ReplayWorld>
   /** Bootstrap dedup: one init + default-policy registration per workspace. */
   ready: Promise<void> | null
+  /**
+   * The most recent dream report in this workspace (v0.2 F2): its incumbent
+   * trajectory digests feed the Listing 2 payload on the next cycle.
+   */
+  lastReport: DreamReport | null
 }
 
 /**
@@ -131,12 +143,14 @@ export class DreamEngine {
   private readonly defaultRoot: string
   private readonly clock: () => Date
   private readonly subprocess: SubprocessService | undefined
+  private readonly llm: LlmRuntime | undefined
   private readonly workspaces = new Map<string, WorkspaceState>()
 
   constructor(options: DreamEngineOptions) {
     this.config = options.config
     this.clock = options.clock ?? (() => new Date())
     this.subprocess = options.subprocess
+    this.llm = options.llm
     this.defaultRoot = path.resolve(options.workspaceRoot ?? process.cwd())
     this.store = this.createStore(this.defaultRoot)
   }
@@ -176,6 +190,7 @@ export class DreamEngine {
       store: key === this.memoKey(this.storeRootOf(this.defaultRoot)) ? this.store : this.createStore(root),
       worlds: new Map(),
       ready: null,
+      lastReport: null,
     }
     this.workspaces.set(key, created)
     return created
@@ -346,6 +361,7 @@ export class DreamEngine {
     const stagnating = roundBest === null || previousBest === null || roundBest <= previousBest
     if (this.config.autoDream === 'every-cycle' || (this.config.autoDream === 'on-stagnation' && stagnating)) {
       try {
+        // --- v0.2 F2: the Listing 2 policy-development loop ---
         const report = await this.dream({}, opts)
         result.autoDream = { report }
       } catch (error) {
@@ -362,6 +378,115 @@ export class DreamEngine {
       }
     }
     return result
+  }
+
+  /**
+   * The v0.2 F2 policy-development loop (runs inside autoDream only).
+   *
+   * `devLoop: 'host-llm'` + a composed `ctx.llm` service: ONE budgeted model
+   * call per cycle with the VERBATIM Listing 2 prompt (plus the adapter
+   * preamble mapping the paper's OptimalPolicy class onto this plugin's
+   * stateless `solve(view)` contract) and a payload of trajectory digests,
+   * score stats, and the incumbent's Python source. The response is parsed
+   * into fenced candidate sources; malformed ones are skipped and logged —
+   * generation failures degrade to an empty pool (incumbent retained), never
+   * a crashed cycle. LLM nondeterminism is confined to this step.
+   *
+   * `devLoop: 'agent-relay'` (default) or a missing llm service returns []
+   * — the host agent authors candidates from the dream report's trajectory
+   * digests and commits them via `dreamrsi_policy_set`.
+   */
+  private async developCandidates(ws: WorkspaceState, opts: WorkspaceOption): Promise<DreamCandidate[]> {
+    if (this.config.devLoop !== 'host-llm' || this.llm === undefined) return []
+    const active = await ws.store.getActivePolicy()
+    if (active === null || active.kind !== 'code') return []
+    const historyDigest = await this.historyDigest(ws)
+    const closedWorlds = await this.closedWorlds(ws)
+    const normalization = computeNormalization(closedWorlds, this.config.normalizeScores)
+    // The incumbent's trajectory digests come from the LAST dream report
+    // (candidate 0 = incumbent, v0.2 F4 digests) — between-round feedback.
+    const trajectories = ws.lastReport?.ranking
+      .find((entry) => entry.candidate === 0)?.perWorld.map((result) => ({
+        worldId: result.worldId,
+        steps: result.trajectory.steps,
+        truncated: result.trajectory.truncated,
+        totalSteps: result.trajectory.totalSteps,
+      })) ?? []
+    const payload: Listing2Payload = {
+      incumbentSource: active.code ?? null,
+      trajectories,
+      scoreStats: {
+        rounds: historyDigest.rounds,
+        totalNodes: historyDigest.totalNodes,
+        bestScoreOverall: historyDigest.bestScoreOverall,
+        bestMechanisms: historyDigest.bestMechanisms,
+        knownDeadEnds: historyDigest.knownDeadEnds,
+        scoreMin: normalization.min,
+        scoreMax: normalization.max,
+      },
+      poolSize: this.config.poolSize,
+    }
+    const prompt = ADAPTER_PREAMBLE + '\n\n' + renderPayload(payload) + '\n\n' + LISTING2_PROMPT
+    const route = this.config.llmRoute ?? this.defaultLlmRoute()
+    if (route === null) return []
+    const budget = Math.max(1, this.config.maxLlmCallsPerCycle)
+    const sources: string[] = []
+    const skipped: string[] = []
+    for (let attempt = 0; attempt < budget && sources.length < this.config.poolSize; attempt++) {
+      try {
+        const text = await this.collectStreamText(route, prompt)
+        const parsed = parseCandidateSources(text, this.config.poolSize - sources.length)
+        sources.push(...parsed.sources)
+        skipped.push(...parsed.skipped)
+        if (parsed.sources.length === 0) break
+      } catch (error) {
+        // Generation failure degrades to keeping the incumbent (never a crash).
+        skipped.push(`llm call failed: ${error instanceof Error ? error.message : String(error)}`)
+        break
+      }
+    }
+    await ws.store.logEvent('dev.loop', { devLoop: 'host-llm', attempts: budget, sources: sources.length, skipped: skipped.length }, { sources: sources.length }, active.version)
+    void opts
+    return sources.map((code) => ({ kind: 'code' as const, code, name: 'llm-candidate', W: 4, version: null }))
+  }
+
+  /** The deployment default route: first registered provider + its first listed model. */
+  private defaultLlmRoute(): { provider: string; model: string } | null {
+    try {
+      const provider = this.llm?.listProviders()[0]?.name
+      if (provider === undefined) return null
+      const model = this.llm?.listModels(provider)[0]?.model
+      return model === undefined ? null : { provider, model }
+    } catch {
+      return null
+    }
+  }
+
+  /** One budgeted streaming call, collected to text (text-delta join). */
+  private async collectStreamText(route: { provider: string; model: string }, prompt: string): Promise<string> {
+    const stream = this.llm!.stream({
+      provider: route.provider,
+      model: route.model,
+      system: prompt,
+      messages: [{ role: 'user', content: 'Produce the candidate policy pool now, per the deliverable section.' }],
+      temperature: 0.8,
+    })
+    let text = ''
+    for await (const chunk of stream) {
+      if (chunk.type === 'text-delta') text += chunk.text
+      if (chunk.type === 'finish' && chunk.reason !== undefined && chunk.reason.kind === 'error') {
+        throw new Error(chunk.reason.failure?.message ?? 'llm finish error')
+      }
+    }
+    return text
+  }
+
+  /** All closed worlds of the workspace, in round order. */
+  private async closedWorlds(ws: WorkspaceState): Promise<ReplayWorld[]> {
+    const closed = (await ws.store.listRounds()).filter((round) => round.status === 'closed')
+    const worlds: ReplayWorld[] = []
+    for (const round of closed) worlds.push(await this.worldFor(ws, round.roundId))
+    return worlds
   }
 
   // ------------------------------------------------------------ history read
@@ -585,7 +710,15 @@ export class DreamEngine {
       ? { kind: 'code', code: active.code ?? '', name: active.name ?? active.version, W: active.W ?? 4, version: active.version }
       : { kind: 'dsl', dsl: active.params as PolicyDsl, version: active.version },
     ]
-    for (const raw of input.candidates ?? []) {
+    const submitted = [...(input.candidates ?? [])]
+    if (submitted.length === 0) {
+      // No candidates submitted (autoDream or a bare dreamrsi_dream call):
+      // the host-llm development loop fills the pool (v0.2 F2). agent-relay
+      // leaves the pool at the incumbent — the dream report's trajectory
+      // digests are the relay payload for the host agent.
+      candidates.push(...await this.developCandidates(ws, opts))
+    }
+    for (const raw of submitted) {
       candidates.push(toDreamCandidate(raw))
     }
 
@@ -626,6 +759,7 @@ export class DreamEngine {
         historyDigest,
       })
       await ws.store.saveDreamReport(report as unknown as DreamStoreReport)
+      ws.lastReport = report
       await ws.store.logEvent('dreamrsi_dream', { candidateCount: candidates.length, sweepBetas: input.sweepBetas ?? [] }, { runId, selected: report.selectedCandidate, selectedKind: report.selectedKind }, active.version)
       return report
     } finally {

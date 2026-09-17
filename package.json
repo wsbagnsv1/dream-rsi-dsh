@@ -1,7 +1,7 @@
 {
   "name": "@dreamrsi/plugin-dream-rsi",
-  "version": "0.1.0",
-  "description": "Dream-RSI recursive self-improvement loop for DSH: discovery-tree memory, offline replay outcome estimation (RCO), and dreaming-based policy improvement exposed as model-facing tools.",
+  "version": "0.2.0",
+  "description": "Dream-RSI recursive self-improvement loop for DSH: code policies (OptimalPolicy as Python), an LLM policy-development loop (Listing 2), a strictly on-manifold replay simulator, and dreaming-based policy improvement exposed as preset-gated model-facing tools.",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

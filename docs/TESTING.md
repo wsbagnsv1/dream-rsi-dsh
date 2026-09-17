@@ -21,6 +21,8 @@ pnpm build       # dist/ emit
 | `preset.spec.ts` | The `Dream-RSI` agent preset: composition shape, standard-assembly coverage, persona workflow guidance, realm discipline, roots overlay, legacy host-mount example |
 | `workspace.spec.ts` | Per-workspace `dataDir` resolution (two workspaces → two stores; same-root reuse; disclosed `process.cwd()` fallback) |
 | `code-policy.spec.ts` | **v0.2 F1/F4**: the `python -I` JSON-lines decision protocol against the real interpreter (bootstrap episode, candidate replay, `solve()` failure → invalid, per-episode timeout → terminate + invalid, missing subprocess seam → invalid candidate never invalid run), fresh stores shipping `v0001.py` + `.runner.py`, `autoDream` every-cycle/off |
+| `dev-loop.spec.ts` | **v0.2 F2**: Listing 2 candidate-block parsing (skip-and-log), host-llm replay through a stub `llm` surface, failure degradation to the incumbent, agent-relay default, replay determinism for identical store + policy code + pool |
+| `v02-fences.spec.ts` | **V2-3 verification fences**: protocol invalidation shapes (malformed returns, garbage stdout, over-W, parent+child), selection invariants over code policies (no-regression, earliest-tie, replay-behavior degenerate detection, `vNNNN.py` lineage), the in-suite scale gate, docs-currency fences |
 | `dsh-schema.spec.ts` | **Real-validator regression fence** (see below) |
 
 ## The real-validator regression fence
@@ -54,18 +56,27 @@ policy). Set nothing — the skip is reported in the vitest output.
 
 ## Perf gate (v0.2 F4)
 
-`bench/perf-gate.mjs` measures the replay wall-time of `poolSize: 32` code
-candidates × the store's closed worlds (one subprocess per candidate, every
-world inside it) and prints per-phase timings. Run it against a store with a
-few closed rounds:
+Two measurement vehicles, same shape (one `python -I` subprocess per candidate,
+every world inside it):
 
-```sh
-node bench/perf-gate.mjs [--rounds 10] [--pool 32] [--dir .dreamrsi-bench]
-```
+1. **In-suite fence** (the CI gate): `tests/v02-fences.spec.ts` (skips when
+   Python is unavailable) seeds ~10 closed worlds on a temp store and replays
+   `poolSize: 32` code candidates against all of them, asserting completion
+   within the ROADMAP-v0.2 F4 budget ("a few minutes on a laptop"; the fence
+   asserts < 300 s) and printing the measured wall-time as `[scale-gate] …`.
+   Measured on the development machine (consumer laptop-class, Windows,
+   Python 3.12): **≈ 3.2–3.5 s** for 32 candidates × 10 worlds.
+2. **Standalone bench**: `node bench/perf-gate.mjs [--rounds 10] [--pool 32]`
+   measures the same shape against a store it builds itself, printing the
+   store-build and replay phases separately plus PASS/CHECK against the 300 s
+   budget. Measured: **replay wall-time 7,754 ms (≈ 24 ms per episode) for
+   32 × 10 worlds — PASS**; store-build phase 431 ms. The bench keeps its
+   store under `.dreamrsi-bench/` for inspection (add that directory to
+   `.gitignore` if you run it).
 
-The gate's budget: poolSize 32 × 10 worlds "in under a few minutes on a
-laptop" (ROADMAP-v0.2 F4). The measured number for the current machine is
-recorded in the v0.2 PR description and CHANGELOG.
+The same in-suite fence doubles as the at-scale determinism check: replaying
+the identical pool twice over the same worlds yields identical candidate ×
+mean-score rankings.
 
 ## What the suite deliberately does not cover
 

@@ -47,9 +47,9 @@ function twoBranchWorld(): ReplayWorld {
   return buildWorld('r0001', fixtureNodesTwoBranches())
 }
 
-/** EstimateContext over one world with default config/DSL. */
-function estFor(world: ReplayWorld, pool: readonly ReplayWorld[] = [world], dsl: PolicyDsl = makeDsl(), config: PluginConfig = makeConfig()): EstimateContext {
-  return { world, pool, config, dsl }
+/** EstimateContext over one world with default config/DSL (RCO on per the fixture). */
+function estFor(world: ReplayWorld, pool: readonly ReplayWorld[] = [world], dsl: PolicyDsl = makeDsl(), config: PluginConfig = makeConfig({ estimate: 'rco' })): EstimateContext {
+  return { world, pool, config, dsl, estimate: config.estimate }
 }
 
 describe('buildWorld — immutable world index (spec §4.3)', () => {
@@ -155,7 +155,11 @@ describe('replay transition — the paper\'s Child rule (spec §4.1)', () => {
   })
 })
 
-describe('novel (off-manifold) actions — RCO estimation (spec §5.3)', () => {
+// OPT-IN BLOCK: every test here runs the RCO estimator explicitly
+// (`estFor` pins `estimate: 'rco'`). The v0.2 default is `estimate: 'off'`
+// (strictly on-manifold replay) — the default-mode identity fences live in
+// v02-fences.spec.ts.
+describe('novel (off-manifold) actions — RCO estimation (spec §5.3, opt-in estimate: "rco")', () => {
   it('exhausted branches estimate a synthetic reveal when the grid plan budgets the move', () => {
     const world = twoBranchWorld()
     const dsl = makeDsl({ gridPlan: { branchCount: 4, refineCount: 4, reason: 'test grid' } })

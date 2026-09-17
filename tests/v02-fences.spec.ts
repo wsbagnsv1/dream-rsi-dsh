@@ -22,9 +22,10 @@ import { spawn as nodeSpawn, spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DreamEngine } from '../src/engine.ts'
 import { BOOTSTRAP_POLICY_SOURCE } from '../src/bootstrap-policy.ts'
+import { buildWorld, commitReveals, initObserved, step, type EstimateContext } from '../src/replay.ts'
 import type { SubprocessService } from '../src/policy-runtime.ts'
 import type { PluginConfig } from '../src/types.ts'
-import { cleanupTempRoots, makeClock, makeConfig, makeTempRoot, must } from './fixtures.ts'
+import { cleanupTempRoots, fixtureNodesTwoBranches, makeClock, makeConfig, makeDsl, makeTempRoot, must } from './fixtures.ts'
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pythonAvailable = spawnSync('python', ['--version'], { timeout: 10000 }).status === 0
@@ -336,5 +337,108 @@ describe('docs currency fences (v0.2)', () => {
     const testing = await readFile(path.join(PACKAGE_ROOT, 'docs', 'TESTING.md'), 'utf8')
     expect(testing).toContain('code-policy')
     expect(testing).toMatch(/scale gate|scale-gate/i)
+  })
+})
+
+describe('on-manifold identity (v0.2 F3: estimate off|rco, task-15 group 1)', () => {
+  it("V1.1: the default estimate mode is 'off' (paper-faithful)", () => {
+    expect(makeConfig().estimate).toBe('off')
+  })
+
+  it('V1.2: dream reports on live-store-derived fixtures carry zero estimated nodes by default', async () => {
+    const { engine, root } = await makeFenceHarness()
+    await engine.bootstrap()
+    // A re-opening code policy: under 'rco' the exhausted root selections would
+    // estimate novel branches; under the default they must reveal nothing
+    // further and the episodes drain to exhaustion (paper semantics). Code
+    // candidates carry no gridPlan, so they are on-manifold in EVERY mode.
+    // World shape matters for the contrast pin: each round gets TWO branches
+    // where one is refined to depth 2 — the deep frontier is what makes the
+    // legacy interpreter re-open the root (novel open → estimate under 'rco').
+    for (const score of [0.2, 0.8]) {
+      const begin = await engine.beginRound({ workspaceRoot: root, workspaceSource: 'session' })
+      await engine.logDecision({
+        roundId: begin.roundId,
+        batchSeq: 1,
+        decisions: [0, 1].map((offset) => ({
+          parentId: null,
+          action: { summary: `mechanism ${offset}`, mechanism: offset === 0 ? 'anneal' : 'cuda-shared-mem', tags: [offset === 0 ? 'anneal' : 'gpu'] },
+          outcome: { score: score + offset * 0.1, evaluated: true, valid: true, failClass: 'ok', error: null, deltaVsBaseline: null, deltaVsParent: null },
+          metrics: { agentCalls: 1, wallMs: 5 },
+        })),
+      }, { workspaceRoot: root, workspaceSource: 'session' })
+      const firstChild = must((await engine.store.getNodes(begin.roundId)).find((node) => node.parentId !== null))
+      await engine.logDecision({
+        roundId: begin.roundId,
+        batchSeq: 2,
+        decisions: [{
+          parentId: firstChild.id,
+          action: { summary: 'deepen the branch', mechanism: firstChild.action.mechanism, tags: firstChild.action.tags },
+          outcome: { score: score + 0.3, evaluated: true, valid: true, failClass: 'ok', error: null, deltaVsBaseline: null, deltaVsParent: null },
+          metrics: { agentCalls: 1, wallMs: 5 },
+        }],
+      }, { workspaceRoot: root, workspaceSource: 'session' })
+      await engine.endRound({ roundId: begin.roundId }, { workspaceRoot: root, workspaceSource: 'session' })
+    }
+    const reopener = 'def solve(view):\n    roots = [s["id"] for s in view["selectable"] if s["kind"] == "root"]\n    return {"batch": roots[:2], "stop": False}\n'
+
+    const report = await engine.dream({ candidates: [reopener] }, { workspaceRoot: root, workspaceSource: 'session' })
+    const challenger = must(report.ranking[1])
+    expect(challenger.invalid).toBeNull()
+    expect(challenger.perWorld.length).toBeGreaterThan(0)
+    for (const world of challenger.perWorld) {
+      expect(world.estOutcomeFraction, `world ${world.worldId}`).toBe(0)
+      for (const step of world.trajectory.steps) {
+        expect(step.estimatedOnly, JSON.stringify(step)).toBe(false)
+        for (const id of step.batch) expect(id, 'no synthetic estimate ids in batches').not.toContain('~est-')
+      }
+    }
+
+    // Contrast pin (non-vacuous fence): the estimator's only client is the
+    // legacy DSL interpreter — the same store + a DSL re-opener candidate
+    // under the opt-in mode DOES estimate where the default does not.
+    const dslReopener = makeDsl({ name: 'dsl-reopener' })
+    const offDslReport = await engine.dream({ candidates: [dslReopener] }, { workspaceRoot: root, workspaceSource: 'session' })
+    const offDslEntry = must(offDslReport.ranking[1])
+    for (const world of offDslEntry.perWorld) {
+      expect(world.estOutcomeFraction, `off-mode world ${world.worldId}`).toBe(0)
+    }
+
+    const rcoEngine = new DreamEngine({
+      config: makeConfig({ dataDir: root, estimate: 'rco' }),
+      workspaceRoot: root,
+      clock: makeClock(),
+      subprocess: localSubprocess(),
+    })
+    const rcoReport = await rcoEngine.dream({ candidates: [makeDsl({ name: 'dsl-reopener' })] }, { workspaceRoot: root, workspaceSource: 'session' })
+    const rcoEntry = must(rcoReport.ranking[1])
+    const rcoHasEstimates = rcoEntry.perWorld.some(
+      (world) => world.estOutcomeFraction > 0 || world.trajectory.steps.some((step) => step.estimatedOnly),
+    )
+    expect(rcoHasEstimates, "estimate: 'rco' must estimate where 'off' did not").toBe(true)
+  })
+
+  it('V1.3: exhausted continuations reveal nothing under off; the identical world estimates under rco', () => {
+    const world = buildWorld('r0001', fixtureNodesTwoBranches())
+    const dsl = makeDsl({ gridPlan: { branchCount: 4, refineCount: 4, reason: 'wide grid' } })
+    const offEst: EstimateContext = { world, pool: [world], config: makeConfig({ estimate: 'off' }), dsl, estimate: 'off' }
+    const rcoEst: EstimateContext = { world, pool: [world], config: makeConfig({ estimate: 'rco' }), dsl, estimate: 'rco' }
+
+    // Open both recorded branches; the root is exhausted of recorded children.
+    const observed = initObserved(world)
+    for (const batch of [['r0001-n000'], ['r0001-n000']]) {
+      commitReveals(observed, batch, step(world, observed, batch, offEst).revealed)
+    }
+    expect(step(world, observed, ['r0001-n000'], offEst).revealed).toEqual([])
+
+    // The identical world and batch under the opt-in mode estimates instead.
+    const rcoObserved = initObserved(world)
+    for (const batch of [['r0001-n000'], ['r0001-n000']]) {
+      commitReveals(rcoObserved, batch, step(world, rcoObserved, batch, rcoEst).revealed)
+    }
+    const rcoReveal = step(world, rcoObserved, ['r0001-n000'], rcoEst).revealed
+    expect(rcoReveal).toHaveLength(1)
+    expect(must(rcoReveal[0]).estimated).toBe(true)
+    expect(must(rcoReveal[0]).node.id).toContain('~est-')
   })
 })

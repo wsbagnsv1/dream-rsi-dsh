@@ -22,10 +22,13 @@ import { spawn as nodeSpawn, spawnSync } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DreamEngine } from '../src/engine.ts'
 import { BOOTSTRAP_POLICY_SOURCE } from '../src/bootstrap-policy.ts'
-import { buildWorld, commitReveals, initObserved, step, type EstimateContext } from '../src/replay.ts'
+import { buildWorld, checkBatchRecords, commitReveals, initObserved, isExhausted, step, type EstimateContext, type ReplayWorld } from '../src/replay.ts'
+import { selectBatch } from '../src/dreaming.ts'
+import type { WorldReplayResult } from '../src/types.ts'
+
 import type { SubprocessService } from '../src/policy-runtime.ts'
 import type { PluginConfig } from '../src/types.ts'
-import { cleanupTempRoots, fixtureNodesTwoBranches, makeClock, makeConfig, makeDsl, makeTempRoot, must } from './fixtures.ts'
+import { cleanupTempRoots, fixtureNodesDepth1BestBranch, fixtureNodesTwoBranches, makeClock, makeConfig, makeDsl, makeTempRoot, must } from './fixtures.ts'
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pythonAvailable = spawnSync('python', ['--version'], { timeout: 10000 }).status === 0
@@ -440,5 +443,140 @@ describe('on-manifold identity (v0.2 F3: estimate off|rco, task-15 group 1)', ()
     expect(rcoReveal).toHaveLength(1)
     expect(must(rcoReveal[0]).estimated).toBe(true)
     expect(must(rcoReveal[0]).node.id).toContain('~est-')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// V2-5 regression fence: the live-campaign r0009 shape
+// ---------------------------------------------------------------------------
+
+describe('V2-5: depth-1-best-branch shape must not floor dreaming (live r0009)', () => {
+  /**
+   * Seed the EXACT live r0009 shape into a fresh store: single root, two
+   * unary chains, the best branch start at DEPTH 1, one depth-2 continuation
+   * on the weaker chain. Created via the real store path so ids/seqs match
+   * live-campaign semantics (n001 branch 0 start, n002 its depth-2 child,
+   * n003 branch 1 start — the best branch at depth 1).
+   */
+  async function seedR0009Shape(engine: DreamEngine, root: string): Promise<string> {
+    const begin = await engine.beginRound({ workspaceRoot: root, workspaceSource: 'session' })
+    // Decision round 1: open two branches (both depth-1 branch starts).
+    await engine.logDecision({
+      roundId: begin.roundId,
+      batchSeq: 1,
+      decisions: [
+        { parentId: null, action: { summary: 'random restart sampler', mechanism: 'random-restart', tags: ['sampler'] }, outcome: { score: 0.3, evaluated: true, valid: true, failClass: 'ok', error: null, deltaVsBaseline: null, deltaVsParent: null }, metrics: { agentCalls: 1, wallMs: 5 } },
+        { parentId: null, action: { summary: 'circle packing iteration 1', mechanism: 'circle-packing', tags: ['geometry'] }, outcome: { score: 0.95, evaluated: true, valid: true, failClass: 'ok', error: null, deltaVsBaseline: null, deltaVsParent: null }, metrics: { agentCalls: 1, wallMs: 5 } },
+      ],
+    }, { workspaceRoot: root, workspaceSource: 'session' })
+    // Decision round 2: refine the weak branch start to depth 2 (0.45).
+    await engine.logDecision({
+      roundId: begin.roundId,
+      batchSeq: 2,
+      decisions: [
+        { parentId: `${begin.roundId}-n001`, action: { summary: 'random restart with local refine', mechanism: 'random-restart', tags: ['sampler'] }, outcome: { score: 0.45, evaluated: true, valid: true, failClass: 'ok', error: null, deltaVsBaseline: null, deltaVsParent: 0.15 }, metrics: { agentCalls: 1, wallMs: 5 } },
+      ],
+    }, { workspaceRoot: root, workspaceSource: 'session' })
+    await engine.endRound({ roundId: begin.roundId }, { workspaceRoot: root, workspaceSource: 'session' })
+    return begin.roundId
+  }
+
+  /** Fixture world with the exact r0009 shape, for direct interpreter checks. */
+  function r0009World(): ReplayWorld {
+    return buildWorld('r0009', fixtureNodesDepth1BestBranch())
+  }
+
+  /** Every composed batch across a full replay episode must be legal. */
+  function assertNoParentChildBatches(entry: { perWorld: WorldReplayResult[]; invalid: string | null }): void {
+    expect(entry.invalid).toBeNull()
+    for (const world of entry.perWorld) {
+      expect(world.invalid, `world ${world.worldId} must replay legally`).toBeUndefined()
+      expect(world.stopReason).not.toBe('invalid')
+      for (const step of world.trajectory.steps) {
+        // A parent+child pair shows up as an illegal-batch invalidation — the
+        // episode would have stopped with stopReason 'invalid' and mean −∞.
+        expect(step.batch.length).toBeGreaterThan(0)
+      }
+    }
+  }
+
+  it.skipIf(!pythonAvailable)('code policy: the interpreter composes legal batches on the r0009 shape — dreaming is not floored', async () => {
+    const { engine, root } = await makeFenceHarness()
+    await engine.bootstrap()
+    const roundId = await seedR0009Shape(engine, root)
+    // Batch 1's two root-opens get ids n001 (weak branch) and n002 (the BEST
+    // branch, at depth 1); batch 2's refine adds n003 (depth 2 on n001).
+    const world = await engine.getWorld(roundId, root)
+    expect(world.rootChildren.map((node) => node.id)).toEqual([`${roundId}-n001`, `${roundId}-n002`])
+    const bestDepth1Leaf = `${roundId}-n002`
+
+    const report = await engine.dream({ candidates: [BOOTSTRAP_POLICY_SOURCE] }, { workspaceRoot: root, workspaceSource: 'session' })
+    const candidate = must(report.ranking.find((entry) => entry.candidate === 1))
+    assertNoParentChildBatches(candidate)
+    // NOT floored: the mean must be a real Eq. 1 value, not the −∞ sentinel.
+    expect(candidate.meanScore).toBeGreaterThan(-1e12)
+    // The best depth-1 branch is reachable in replay: the episode must reveal it.
+    const reveals = candidate.perWorld.flatMap((result) => result.trajectory.steps.flatMap((step) => step.batch))
+    expect(reveals).toContain(bestDepth1Leaf)
+    // Explainability aid: every world replayed validly.
+    expect(report.validWorlds).toBe(report.historySize)
+  })
+
+  it('legacy DSL: selectBatch composes a legal alternative plan (refine both depth-1 leaves, or root alone)', () => {
+    const world = r0009World()
+    const dsl = makeDsl({ W: 4, gridPlan: { branchCount: 3, refineCount: 3, reason: 'r0009 fence grid' } })
+    const observed = initObserved(world)
+    const weakLeaf = 'r0009-n001'   // branch 0 start (0.3), has a depth-2 child
+    const bestLeaf = 'r0009-n002'   // branch 1 start (0.95, the BEST depth-1 leaf)
+
+    // Round 1: only the root is selectable → [root] is the only legal plan.
+    const batch1 = selectBatch(dsl, world, observed.revealed)
+    expect(batch1).toEqual([world.rootId])
+    commitReveals(observed, batch1, step(world, observed, batch1, { world, pool: [world], config: makeConfig(), dsl, estimate: 'off' }).revealed)
+
+    // Round 2: root + n001 revealed. The danger pair is [root, n001] — the
+    // interpreter must compose either [root] alone or refinements that
+    // exclude root children, never the pair itself.
+    const batch2 = selectBatch(dsl, world, observed.revealed)
+    expect(batch2.includes(world.rootId) && batch2.includes(weakLeaf)).toBe(false)
+
+    // Drive the revealed nodes to episode end; every batch must be legal
+    // (no parent+child pair, all ids revealed/selectable), and the episode
+    // must reveal the BEST depth-1 leaf via the remaining root branch.
+    commitReveals(observed, batch2, step(world, observed, batch2, null).revealed)
+    let sawBest = observed.revealed.has(bestLeaf)
+    for (let round = 0; round < 12 && !isExhausted(world, observed); round++) {
+      const batch = selectBatch(dsl, world, observed.revealed)
+      if (batch.length === 0) break
+      for (const id of batch) {
+        expect(observed.revealed.has(id) || world.nodeById.has(id), `batch id ${id} must be revealed/selectable`).toBe(true)
+      }
+      const violation = checkBatchRecords(world, observed, batch, dsl.W)
+      expect(violation, `illegal batch [${batch.join(', ')}] on the r0009 shape`).toBeNull()
+      expect(batch.includes(world.rootId) && batch.includes(weakLeaf), `parent+child pair composed: [${batch.join(', ')}]`).toBe(false)
+      commitReveals(observed, batch, step(world, observed, batch, null).revealed)
+      sawBest = sawBest || observed.revealed.has(bestLeaf)
+    }
+    expect(sawBest, 'the best depth-1 branch must be revealed by the episode').toBe(true)
+  })
+
+  it('surfaces validWorlds so a floored mean is explainable (invalid worlds are countable, semantics unchanged)', async () => {
+    const { engine, root } = await makeFenceHarness()
+    await engine.bootstrap()
+    // Seed the r0009 shape so the invalid candidate actually replays episodes.
+    await seedR0009Shape(engine, root)
+    const report = await engine.dream({
+      candidates: ['def solve(view):\n    return {"batch": ["r9999-n999"], "stop": False}\n'],
+    }, { workspaceRoot: root, workspaceSource: 'session' })
+    const candidate = must(report.ranking[1])
+    expect(candidate.meanScore).toBe(-1e12)
+    expect(candidate.perWorld.every((world) => world.invalid !== undefined)).toBe(true)
+    expect(report.historySize).toBe(1)
+    // validWorlds reflects the SELECTED candidate (the incumbent, which is
+    // healthy) — the floored challenger's perWorld[].invalid explains ITS floor.
+    expect(report.validWorlds).toBe(1)
+    // The healthy incumbent replayed validly on every world.
+    const incumbent = must(report.ranking[0])
+    expect(incumbent.invalid).toBeNull()
   })
 })

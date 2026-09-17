@@ -984,6 +984,12 @@ export async function runDream(input: DreamInput): Promise<DreamReport> {
   const noRegression = selectedScore >= incumbentScore - 1e-9
   const selectedCandidate = selected?.candidate ?? 0
   const selectedDreamCandidate = candidates[selectedCandidate]
+  // validWorlds (v0.2): worlds on which the SELECTED candidate replayed
+  // validly — the explainability aid for a floored/low mean (the
+  // mean-over-worlds semantics itself is intentionally unchanged).
+  const validWorlds = worlds.length === 0
+    ? 0
+    : (selected?.perWorld.filter((result) => result.invalid === undefined).length ?? 0)
 
   return {
     runId,
@@ -997,6 +1003,7 @@ export async function runDream(input: DreamInput): Promise<DreamReport> {
     ranking,
     guards: { noRegression, incumbentScore },
     historySize: worlds.length,
+    validWorlds,
     normalization: normalization.enabled
       ? { min: normalization.min, max: normalization.max, enabled: true }
       : { min: 0, max: 0, enabled: false },

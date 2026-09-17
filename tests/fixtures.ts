@@ -208,6 +208,38 @@ export function fixtureNodesSingleChain(roundId = 'r0002'): NodeRecord[] {
   ]
 }
 
+/**
+ * The live-campaign r0009 shape (V2-5 regression fixture): a single root with
+ * TWO unary chains — both best scores at DEPTH 1 (the branch starts) — plus a
+ * weaker depth-2 continuation on one chain. In campaign 2 this exact shape
+ * made the old single-plan interpreter compose [root, best-depth-1-leaf] — a
+ * parent+child pair → illegal → every candidate floored at −1e12.
+ */
+export function fixtureNodesDepth1BestBranch(roundId = 'r0009'): NodeRecord[] {
+  return [
+    rootNode(roundId),
+    // Branch 0 (weak branch start, depth 1): score 0.3.
+    attemptNode({
+      id: `${roundId}-n001`, roundId, parentId: `${roundId}-n000`,
+      seq: 1, depth: 1, branchId: 0, seqInBranch: 0,
+      score: 0.3, summary: 'random restart sampler', mechanism: 'random-restart', tags: ['sampler'],
+    }),
+    // Branch 1 (THE BEST branch, also depth 1): score 0.95 — the live
+    // finding's "best branch at depth 1". No continuation beyond it.
+    attemptNode({
+      id: `${roundId}-n003`, roundId, parentId: `${roundId}-n000`,
+      seq: 3, depth: 1, branchId: 1, seqInBranch: 0,
+      score: 0.95, summary: 'circle packing iteration 1', mechanism: 'circle-packing', tags: ['geometry'],
+    }),
+    // Branch 0's depth-2 continuation (weaker than its parent): score 0.45.
+    attemptNode({
+      id: `${roundId}-n002`, roundId, parentId: `${roundId}-n001`,
+      seq: 2, depth: 2, branchId: 0, seqInBranch: 1,
+      score: 0.45, summary: 'random restart with local refine', mechanism: 'random-restart', tags: ['sampler'],
+    }),
+  ]
+}
+
 // ---------------------------------------------------------------------------
 // AppendDecision / PolicyDsl factories (store + dreaming tests)
 // ---------------------------------------------------------------------------

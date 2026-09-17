@@ -538,6 +538,14 @@ export interface DreamReport {
   guards: { noRegression: boolean; incumbentScore: number }
   /** Number of worlds (closed trees) scored. */
   historySize: number
+  /**
+   * Worlds on which the selected candidate replayed VALIDLY (v0.2 F2-adjacent
+   * explainability aid, from the live-campaign r0009 finding): when
+   * `validWorlds < historySize`, a floored (−∞) or low mean score is
+   * attributable to the invalid worlds listed in `ranking[].perWorld[].invalid`
+   * — the mean-over-worlds semantics itself is unchanged by design.
+   */
+  validWorlds: number
   /** Score normalization bounds used for Eq. 1 (nulls when normalization off/empty). */
   normalization: { min: number; max: number; enabled: boolean } | null
 }

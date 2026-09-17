@@ -253,6 +253,11 @@ export function buildToolDefinitions(engine: DreamEngine): AnyToolDefinition[] {
             worldId: { type: 'string', required: true },
             simulator: { type: 'object', additionalProperties: true, description: '{ nodes, branches, maxDepth }' },
             activePolicyVersion: { type: 'string', required: true },
+            autoDream: {
+              type: 'object',
+              additionalProperties: true,
+              description: 'Auto-dream outcome (v0.2 autoDream): { report: DreamReport } when the dream ran, or { report: null, skippedReason } when skipped/failed; absent only for pre-v0.2 results',
+            },
           },
         },
         render: jsonRender,

@@ -60,6 +60,22 @@ def solve(view: dict) -> dict:
 
 ---
 
+## DSH plugin conformance (how rev 2 stays a plugin)
+
+Rev 2 adds no new process model — every paper capability maps onto an existing injectable harness service, exactly like v0.1's tool registrations:
+
+| Paper capability | DSH plugin mechanism |
+|---|---|
+| `OptimalPolicy` execution (code policies) | `ctx.subprocess` (SubprocessRuntime service): fully-explicit spawn spec — `python -I` argv (never shell-interpreted), scrubbed env, piped stdin/stdout for the JSON-lines decision protocol, abort signal + `terminate()` for episode timeouts. Where a sandboxed provider is composed (e.g. E2B), policy execution inherits that world automatically. Inject `['tools', 'subprocess']`. |
+| LLM policy development (Listing 2) | `ctx.llm` (the llm service: adapter registry + streaming model-call API): one budgeted call with `GenerateOptions.{provider, model}` + the Listing 2 payload, stream collected to text. Route resolution and retry policies come from the service, not ad-hoc HTTP. Inject `'llm'` optionally — `ctx.get('llm')` with fail-soft to `agent-relay`. |
+| Discovery-tree store | Unchanged: `.dreamrsi/` under the per-workspace dataDir (v0.1.1 behavior). |
+| Model-facing tools | Unchanged: `ctx.tools.register(defineTool(...))` — new tools (`judgment_*` if ever needed, pool/refine params) go through the same strict-schema fence. |
+| Preset gating | Unchanged: `preset/dream-rsi/agent.cordis.yml` gains an `inject` extension for the subprocess/llm services on the plugin row; still nothing mounted unless the session picks the preset. |
+
+Trust posture, restated for the subprocess surface: policy code is authored by the configured LLM and executed via `ctx.subprocess` with explicit dispositions (timeout, abort, scrubbed env) — the same trusted-configuration model that already justifies preset compositions, with the documented residual risk that ordinary `spawn()` is not a filesystem/network jail on Windows.
+
+---
+
 ## Compatibility
 
 - Existing stores: DSL policies replay under `legacy`; new cycles generate code policies; `activeVersion` pointers preserved.

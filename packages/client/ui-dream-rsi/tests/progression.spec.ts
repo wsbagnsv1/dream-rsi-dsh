@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  computeProgression, roundColor, thinIndices, toIterationNodes,
+  computeProgression, paretoPolyline, roundColor, thinIndices, toIterationNodes,
 } from '../src/client/progression.ts'
 import type { IterationPoint, RoundNodes } from '../src/client/progression.ts'
 import type { NodeRow } from '../src/client/read.ts'
@@ -197,6 +197,40 @@ describe('computeProgression', () => {
     expect(progression.min).toBe(0)
     expect(progression.max).toBe(2.6359830849)
     expect(progression.rounds).toBe(2)
+  })
+
+  it('the Pareto polyline TERMINATES at the last attainer — no carry-forward tail (W10)', () => {
+    // runningBest carries 2.636 flat through iterations 6 (the champion's own
+    // index) — wait, the champion IS at 6 here; use a tail case: the champion
+    // attains at 4 and 6 is dominated.
+    const runningBest: (number | undefined)[] = [
+      undefined, 0.9598, 0.9598, 0.9598, 1.8, 1.8, 1.8, 1.8, 1.8,
+    ]
+    const polyline = paretoPolyline(runningBest)
+    // The staircase: start at the first attainer (1, 0.9598), rise at 4 (1.8),
+    // and END at iteration 4 — iterations 5-8 are dominated, not on the frontier.
+    expect(polyline).toEqual([
+      { iteration: 1, value: 0.9598 },
+      { iteration: 4, value: 0.9598 },
+      { iteration: 4, value: 1.8 },
+    ])
+    expect(Math.max(...polyline.map(vertex => vertex.iteration))).toBe(4)
+    // The attainer staircase is unchanged up to the end (one rise, one start).
+    expect(polyline).toHaveLength(3)
+  })
+
+  it('the polyline ends exactly at the champion (the final attainer) on the W4 fixture', () => {
+    const { iterations } = toIterationNodes(fixtureRounds())
+    const progression = computeProgression(iterations)
+    const polyline = paretoPolyline(progression.runningBest)
+    const last = polyline[polyline.length - 1]
+    expect(last).toEqual({ iteration: progression.finalChampionIndex, value: 2.6359830849 })
+    expect(Math.max(...polyline.map(vertex => vertex.iteration))).toBe(progression.finalChampionIndex ?? 0)
+  })
+
+  it('an all-undefined frontier yields no polyline; a single attainer yields one vertex', () => {
+    expect(paretoPolyline([undefined, undefined])).toEqual([])
+    expect(paretoPolyline([undefined, 2.5, 2.5])).toEqual([{ iteration: 1, value: 2.5 }])
   })
 
   it('marks policy changes at iteration indices (first node under the new version)', () => {

@@ -269,6 +269,45 @@ export function roundColor(index: number): string {
   return `hsl(${String(hue)}, 58%, 48%)`
 }
 
+/** One polyline vertex of the Pareto frontier, in iteration/score space. */
+export interface ParetoVertex {
+  iteration: number
+  value: number
+}
+
+/**
+ * The Pareto frontier polyline: the attainer staircase, TERMINATING at the
+ * last attainer (the champion).
+ *
+ * Mathematically, dominated attempts are not on the frontier — every attempt
+ * after the champion is dominated by it — so the polyline carries NO flat
+ * tail beyond the last attainer, and attempts that merely TIE the running
+ * best add no vertex either (they did not attain a new title).
+ * @param runningBest - the running-best series (may carry `undefined` before
+ *   the first valid attempt, and a flat best-so-far tail after the champion —
+ *   both are ignored here).
+ * @returns the staircase vertices; empty when no attempt attains.
+ */
+export function paretoPolyline(runningBest: readonly (number | undefined)[]): ParetoVertex[] {
+  const vertices: ParetoVertex[] = []
+  let lastValue: number | undefined
+  for (let index = 0; index < runningBest.length; index += 1) {
+    const value = runningBest[index]
+    if (value === undefined) continue
+    if (lastValue === undefined) {
+      vertices.push({ iteration: index, value })
+      lastValue = value
+      continue
+    }
+    if (value === lastValue) continue // carried/dominated: not on the frontier
+    // The value rose at this iteration: horizontal to it, then the jump.
+    vertices.push({ iteration: index, value: lastValue })
+    vertices.push({ iteration: index, value })
+    lastValue = value
+  }
+  return vertices
+}
+
 /**
  * Slice the iteration sequence to a plotted window (the range control).
  *

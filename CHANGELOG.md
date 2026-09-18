@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.6 — the Pareto frontier terminates at the champion
+
+- **User correction (mathematically right)**: the frontier line no longer
+  carries flat beyond the champion — dominated attempts are not on the
+  frontier. The polyline now ENDS at the last attainer's iteration (the
+  pure `paretoPolyline` replaces the carry-forward rendering; attempts that
+  merely tie the running best add no vertex either). The subpoints after the
+  champion remain visible below the frontier's end; the ★ sits exactly at
+  the path's end. A dotted best-so-far extension may return later as an
+  opt-in — default off per the user's read.
+- Era/window composition holds: within a plotted window the frontier ends
+  at that window's last attainer.
+- Tests: +4 polyline fences (tail truncation, staircase shape unchanged,
+  ends exactly at the champion/finalChampionIndex, degenerate inputs).
+  Package suite: 104.
+
 ## 0.4.5 — champion-run emphasis + styled hover tooltips
 
 - **Champion run on the iteration chart** (user report: the raw-probe y-domain

@@ -15,7 +15,7 @@
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import { roundColor, thinIndices, X_LABEL_CAP, STAR_GLYPH } from './progression.ts'
+import { paretoPolyline, roundColor, thinIndices, X_LABEL_CAP, STAR_GLYPH } from './progression.ts'
 import type { IterationPoint, Progression } from './progression.ts'
 import { ChartTooltip } from './ChartTooltip.tsx'
 import type { ChartTooltipLine } from './ChartTooltip.tsx'
@@ -131,32 +131,17 @@ export function ProgressionChart({ progression, t }: ProgressionChartProps): Rea
     [roundStarts],
   )
 
+  // The Pareto frontier polyline TERMINATES at the last attainer (the
+  // champion): dominated attempts past it are not on the frontier, so no
+  // flat carry-forward tail is drawn past that point (W10).
   const paretoPath = useMemo(() => {
     if (points.length === 0) return ''
-    const segments: string[] = []
-    let started = false
-    let lastValue: number | undefined
-    for (let index = 0; index < points.length; index += 1) {
-      const value = runningBest[index]
-      // Before the first valid attempt the frontier does not exist yet.
-      if (value === undefined) continue
-      const x = scaleX(index)
-      const y = scaleY(value)
-      if (!started) {
-        segments.push(`M${x.toFixed(1)},${y.toFixed(1)}`)
-        started = true
-        lastValue = value
-        continue
-      }
-      // hv step: horizontal at the previous frontier value up to this x
-      // (carried across invalid gaps), then the jump when it moved.
-      if (lastValue !== undefined && lastValue !== value) {
-        segments.push(`L${x.toFixed(1)},${scaleY(lastValue).toFixed(1)}`)
-      }
-      segments.push(`L${x.toFixed(1)},${y.toFixed(1)}`)
-      lastValue = value
-    }
-    return segments.join(' ')
+    const vertices = paretoPolyline(runningBest)
+    if (vertices.length === 0) return ''
+    return vertices.map((vertex, index) => {
+      const command = index === 0 ? 'M' : 'L'
+      return `${command}${scaleX(vertex.iteration).toFixed(1)},${scaleY(vertex.value).toFixed(1)}`
+    }).join(' ')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [points, min, max])
 

@@ -15,7 +15,8 @@ type reading workspace files through the `workspaceFiles` Remote namespace.
   `policies/policy-index.json` with status (active/retired), kind, name, and
   derivation.
 - **Rounds table** — per-round status, policy, nodes, attempts, and best score
-  from `trees/<roundId>/round.json` (latest 12).
+  from `trees/<roundId>/round.json` — **every** round with a tree, newest
+  first, scrollable (sticky header).
 - **Dream reports** — recent `dreams/dNNNN.json` runs: the selected candidate,
   its mean replay score, valid-world counts, and floored/invalid diagnostics
   (latest 8).

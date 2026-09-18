@@ -29,8 +29,6 @@ import { toIterationNodes } from './progression.ts'
 import type { RoundNodes } from './progression.ts'
 import type { DashboardData, createDreamRsiStore } from './store.ts'
 
-/** How many recent rounds the panel reads (older ones are cut). */
-export const ROUND_CAP = 12
 /** How many recent dream reports the panel reads. */
 export const DREAM_CAP = 8
 /** How many leading event lines the panel reads. */
@@ -227,7 +225,7 @@ export async function load(
   return { kind: 'loaded', data }
 }
 
-/** The trees/ directory: round rows newest first, cut to the cap. */
+/** The trees/ directory: round rows newest first — EVERY round with a tree. */
 async function listRoundRows(
   remote: WorkspaceFilesRemote,
   sessionId: SessionId,
@@ -235,7 +233,9 @@ async function listRoundRows(
 ): Promise<{ rounds: RoundRow[]; truncated: boolean } | undefined> {
   const listing = await listDir(remote, sessionId, `${STORE_DIR}/trees`, signal)
   if (listing === undefined) return undefined
-  const ids = listing.names.filter(name => name.startsWith('r')).sort(descending).slice(0, ROUND_CAP)
+  // No cap: the rounds table and the forest view surface every round
+  // (r0001…rNNNN); the table scrolls and the forest bands scale.
+  const ids = listing.names.filter(name => name.startsWith('r')).sort(descending)
   const rounds: RoundRow[] = []
   for (const roundId of ids) {
     const text = await readJsonFile(remote, sessionId, `${STORE_DIR}/trees/${roundId}/round.json`, signal)

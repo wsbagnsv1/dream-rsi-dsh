@@ -116,7 +116,7 @@ A client plugin (`packages/client/ui-dream-rsi/`) adds a **Dream-RSI campaign da
 - **Progression chart** — every logged discovery attempt across all rounds as a scatter (x = global iteration index, chronological): valid attempts solid, failed/invalid hollow (score 0 included), colored by round; the **Pareto frontier** (monotone running maximum) as the headline step line; policy-change markers at the iteration where a new version took over; hover per subpoint (round, node, mechanism, score, valid/failClass);
 - **Discovery forest** — the WHOLE accumulated discovery history in one banded SVG view: every attempt from all rounds (each round's tree in its own band, left→right chronologically, subtle separators + round labels), nodes colored by the same score gradient with failed attempts dimmed, the **global best path** (each round's best chain, concatenated — the champion lineage) highlighted end-to-end, hover tooltips, and a round filter (all = default forest; a selected round focuses its single tree with a best-path toggle);
 - **Policy lineage** — the full `v0001 → vNNNN` timeline with statuses, kinds, and derivation;
-- **Rounds table** — per-round status, policy, nodes, attempts, best score (latest 12);
+- **Rounds table** — per-round status, policy, nodes, attempts, best score for EVERY round with a tree (newest first, scrollable);
 - **Dream reports** — selected candidate, mean replay score, valid-world counts, floored/invalid diagnostics (latest 8);
 - **Events tail** — the last lines of `events.jsonl`;
 - a **Refresh** control (the store updates while campaigns run), and a graceful empty state when the workspace has no `.dreamrsi/` yet.

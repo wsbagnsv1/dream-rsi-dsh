@@ -105,6 +105,8 @@ const css = {
   th: {
     textAlign: 'left', fontWeight: 600, fontSize: 11, color: 'var(--dsh-fg-muted, #888)',
     borderBottom: '1px solid var(--dsh-border, #ddd)', padding: '2px 8px 2px 0', whiteSpace: 'nowrap',
+    // Sticky under the rounds table's scroll container.
+    position: 'sticky', top: 0, background: 'var(--dsh-bg, #fff)', zIndex: 1,
   } satisfies React.CSSProperties,
   td: {
     borderBottom: '1px solid var(--dsh-border, #eee)', padding: '3px 8px 3px 0', verticalAlign: 'top',
@@ -121,6 +123,9 @@ const css = {
   treeSelect: {
     fontSize: 12, padding: '2px 6px', borderRadius: 6,
     border: '1px solid var(--dsh-border, #ccc)', background: 'transparent', color: 'inherit',
+  } satisfies React.CSSProperties,
+  roundsScroll: {
+    maxHeight: 380, overflowY: 'auto',
   } satisfies React.CSSProperties,
 }
 
@@ -179,36 +184,38 @@ function LineageItem({ policy, t }: { policy: PolicyRow; t: PropsLocale<'dreamRs
   )
 }
 
-/** The rounds table: one row per closed or open round, newest first. */
+/** The rounds table: one row per round, newest first, every round reachable (scrolls). */
 function RoundsTable({ rounds, t }: { rounds: readonly RoundRow[]; t: PropsLocale<'dreamRsi'>['t'] }): ReactNode {
   if (rounds.length === 0) return <div style={css.note}>{t('rounds.empty')}</div>
   return (
-    <table style={css.table} data-dream-rsi='rounds'>
-      <thead>
-        <tr>
-          <th style={css.th}>{t('rounds.round')}</th>
-          <th style={css.th}>{t('rounds.status')}</th>
-          <th style={css.th}>{t('rounds.policy')}</th>
-          <th style={{ ...css.th, ...css.tdNum }}>{t('rounds.nodes')}</th>
-          <th style={{ ...css.th, ...css.tdNum }}>{t('rounds.attempts')}</th>
-          <th style={{ ...css.th, ...css.tdNum }}>{t('rounds.best')}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rounds.map(round => (
-          <tr key={round.roundId} data-dream-rsi-round={round.roundId}>
-            <td style={css.td}>{round.roundId}</td>
-            <td style={css.td}>{round.status === 'open' ? t('rounds.open') : t('rounds.closed')}</td>
-            <td style={css.td}>{round.policyVersion ?? ''}</td>
-            <td style={{ ...css.td, ...css.tdNum }}>{round.nodes === undefined ? '' : String(round.nodes)}</td>
-            <td style={{ ...css.td, ...css.tdNum }}>{round.attempts === undefined ? '' : String(round.attempts)}</td>
-            <td style={{ ...css.td, ...css.tdNum }} data-dream-rsi-best={round.bestScore === undefined ? '' : String(round.bestScore)}>
-              {round.bestScore === undefined ? '' : scoreText(round.bestScore)}
-            </td>
+    <div style={css.roundsScroll} data-dream-rsi='rounds-scroll'>
+      <table style={css.table} data-dream-rsi='rounds' data-dream-rsi-round-count={String(rounds.length)}>
+        <thead>
+          <tr>
+            <th style={css.th}>{t('rounds.round')}</th>
+            <th style={css.th}>{t('rounds.status')}</th>
+            <th style={css.th}>{t('rounds.policy')}</th>
+            <th style={{ ...css.th, ...css.tdNum }}>{t('rounds.nodes')}</th>
+            <th style={{ ...css.th, ...css.tdNum }}>{t('rounds.attempts')}</th>
+            <th style={{ ...css.th, ...css.tdNum }}>{t('rounds.best')}</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {rounds.map(round => (
+            <tr key={round.roundId} data-dream-rsi-round={round.roundId}>
+              <td style={css.td}>{round.roundId}</td>
+              <td style={css.td}>{round.status === 'open' ? t('rounds.open') : t('rounds.closed')}</td>
+              <td style={css.td}>{round.policyVersion ?? ''}</td>
+              <td style={{ ...css.td, ...css.tdNum }}>{round.nodes === undefined ? '' : String(round.nodes)}</td>
+              <td style={{ ...css.td, ...css.tdNum }}>{round.attempts === undefined ? '' : String(round.attempts)}</td>
+              <td style={{ ...css.td, ...css.tdNum }} data-dream-rsi-best={round.bestScore === undefined ? '' : String(round.bestScore)}>
+                {round.bestScore === undefined ? '' : scoreText(round.bestScore)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }
 

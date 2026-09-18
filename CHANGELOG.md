@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.1 — all-rounds visibility (no cap)
+
+- **User report fix**: the panel capped visibility at the latest 12 rounds
+  (W1's read cap). The cap is REMOVED: the rounds table, the tree/forest
+  round filter, the progression subpoints, and the champion totals now cover
+  EVERY round with a `trees/<roundId>/` directory (37 in the reported store).
+- The rounds table scrolls (380px, sticky header), newest first — the latest
+  round stays default-visible while every older one stays reachable.
+- The `truncatedRounds` note now means only a truncated directory listing.
+- Fence: a scripted in-memory workspace drives the face's full `load()`
+  with 30 rounds — rounds/forest/attempts coverage asserted end-to-end
+  (the old latest-12 behavior would fail every case). Package suite: 62.
+
 ## 0.4.0 — global discovery forest
 
 - **The discovery-tree section goes global** (user directive): the WHOLE

@@ -82,7 +82,7 @@ export const zh = {
   'progress.attempts': '次尝试',
   'progress.markers': '策略切换',
   'worlds': '{count} / {total}',
-  'truncatedRounds': '只显示最近 {count} 个轮次。',
+  'truncatedRounds': '部分轮次未列出（目录列表被截断，已读 {count} 个）。',
   'truncatedDreams': '只显示最近 {count} 份报告。',
 } satisfies Record<string, string>
 
@@ -157,6 +157,6 @@ export const en = {
   'progress.attempts': 'attempts',
   'progress.markers': 'Policy changes',
   'worlds': '{count} / {total}',
-  'truncatedRounds': 'Showing the latest {count} rounds.',
+  'truncatedRounds': 'Some rounds are not listed (directory listing truncated; {count} read).',
   'truncatedDreams': 'Showing the latest {count} reports.',
 } satisfies Record<DreamRsiKey, string>

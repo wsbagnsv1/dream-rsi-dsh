@@ -144,6 +144,8 @@ export class DreamEngine {
   private readonly clock: () => Date
   /** The subprocess seam for code policies and the ncu benchmark tool. */
   readonly subprocess: SubprocessService | undefined
+  /** Explicit ncu path override for the nsight benchmark tool (plugin config). */
+  readonly nsightNcuPath: string | undefined
   private readonly llm: LlmRuntime | undefined
   private readonly workspaces = new Map<string, WorkspaceState>()
 
@@ -151,6 +153,7 @@ export class DreamEngine {
     this.config = options.config
     this.clock = options.clock ?? (() => new Date())
     this.subprocess = options.subprocess
+    this.nsightNcuPath = options.config.nsightNcuPath
     this.llm = options.llm
     this.defaultRoot = path.resolve(options.workspaceRoot ?? process.cwd())
     this.store = this.createStore(this.defaultRoot)

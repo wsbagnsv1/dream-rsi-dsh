@@ -104,6 +104,15 @@ export interface PluginConfig {
    * superset; calibration caveats documented as extension caveats).
    */
   estimate: 'off' | 'rco'
+  /**
+   * Explicit absolute path to `ncu.exe` for `dreamrsi_nsight_bench`
+   * (optional). When unset the tool resolves the executable at execute time:
+   * `where ncu` on the system PATH first (preferring ncu.exe over ncu.bat —
+   * the argv-based subprocess seam never shell-interprets), then the common
+   * Nsight Compute install locations. Set this when the scrubbed subprocess
+   * PATH cannot see the Nsight Compute directory.
+   */
+  nsightNcuPath?: string
 }
 
 /** Schema defaults, kept in one place so `index.ts` and docs stay in sync. */

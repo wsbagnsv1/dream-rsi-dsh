@@ -391,7 +391,7 @@ export function buildToolDefinitions(engine: DreamEngine): AnyToolDefinition[] {
 
     defineTool({
       name: 'dreamrsi_nsight_bench',
-      description: 'Profile CUDA kernels with Nsight Compute (ncu --csv). Runs the given kernel-runner command under ncu, parses the CSV report, and returns per-kernel aggregated metrics (duration µs, DRAM bytes, SM throughput %, occupancy limit, grid/block size) across all launches. Use this to BENCHMARK kernel optimizations with real profiling signals — duration, memory traffic, and occupancy — not just wall-clock. Requires ncu (Nsight Compute) on PATH and a CUDA-capable GPU. The target command should launch the kernels you want profiled.',
+      description: 'Profile CUDA kernels with Nsight Compute (ncu --csv). Runs the given kernel-runner command under ncu, parses the CSV report, and returns per-kernel aggregated metrics (duration µs, DRAM bytes, SM throughput %, occupancy limit, grid/block size) across all launches. Use this to BENCHMARK kernel optimizations with real profiling signals — duration, memory traffic, and occupancy — not just wall-clock. Requires ncu (Nsight Compute) on the system PATH or an explicit ncuPath, plus a CUDA-capable GPU. The target command should launch the kernels you want profiled.',
       parameters: {
         command: {
           type: 'string',
@@ -405,6 +405,10 @@ export function buildToolDefinitions(engine: DreamEngine): AnyToolDefinition[] {
         },
         label: { type: 'string', description: 'Optional label for this benchmark run (returned in notes).' },
         timeout: { type: 'integer', description: 'Wall-clock budget in milliseconds (default 120000).' },
+        ncu_path: {
+          type: 'string',
+          description: 'Optional absolute path to ncu.exe. When omitted the tool resolves ncu from the system PATH (where ncu) and then the common Nsight Compute install locations; set this when the subprocess PATH cannot see the Nsight Compute directory.',
+        },
       },
       output: {
         schema: {
@@ -418,10 +422,12 @@ export function buildToolDefinitions(engine: DreamEngine): AnyToolDefinition[] {
         if (engine.subprocess === undefined) {
           throw new EngineError('nsight bench requires the subprocess service (inject: subprocess)')
         }
+        const ncuPath = args.ncu_path ?? engine.nsightNcuPath
         return runNsightBench({
           command: args.command,
           ...(args.metrics !== undefined ? { metrics: args.metrics } : {}),
           ...(args.timeout !== undefined ? { timeout: args.timeout } : {}),
+          ...(ncuPath !== undefined && ncuPath !== '' ? { ncuPath } : {}),
           cwd: resolveWorkspace(exec).root,
           subprocess: engine.subprocess as import('./nsight.ts').NsightSubprocessService,
           signal: exec.signal,

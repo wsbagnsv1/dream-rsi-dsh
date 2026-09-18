@@ -221,10 +221,20 @@ limit mean, grid/block size) plus total duration and a launch count.
 `launch__occupancy_limit_blocks`, `launch__grid_size`,
 `launch__block_size`. Override with the `metrics` parameter.
 
-**Requirements**: ncu (Nsight Compute) on PATH + a CUDA-capable GPU. The
-tool never crashes the cycle — every failure mode (ncu missing, target
-non-zero exit, no kernels launched, timeout) surfaces as a clean error or
-diagnostic. A system-level integration test runs when ncu is available.
+**Requirements**: ncu (Nsight Compute) on the system PATH **or** an
+explicit `nsightNcuPath` plugin-config pin (the tool argument `ncu_path`
+also overrides per call) + a CUDA-capable GPU. The subprocess seam's
+scrubbed PATH does not carry the Nsight Compute directory, so the tool
+resolves the executable at execute time: `where ncu` on the full system
+PATH first (preferring `ncu.exe` over the `ncu.bat` wrapper — argv is
+never shell-interpreted), then the common install locations
+(`C:\Program Files\NVIDIA Corporation\Nsight Compute *\…`, including the
+2025.x nested `target\windows-desktop-win7-x64\ncu.exe` layout), spawning
+the resolved ABSOLUTE path. The tool never crashes the cycle — every
+failure mode (ncu missing → guidance listing the searched locations,
+target non-zero exit, no kernels launched, timeout) surfaces as a clean
+error or diagnostic. A system-level integration test runs when ncu is
+available.
 
 ## Data model
 

@@ -8,12 +8,16 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import * as path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   DEFAULT_NSIGHT_METRICS,
+  globNcuInstall,
   parseCsvLine,
   parseMetricValue,
   parseNcuCsv,
+  resolveNcuExecutable,
   runNsightBench,
   type NsightSubprocessService,
 } from '../src/nsight.ts'
@@ -161,25 +165,131 @@ describe('parseNcuCsv (fixture-based, locale-formatted real ncu output)', () => 
 // Subprocess execution (mocked — no GPU in CI)
 // ---------------------------------------------------------------------------
 
-/** Build a mock subprocess service that emits the given stdout/stderr and exit code. */
-function mockSubprocess(stdout: string, stderr = '', exitCode = 0): NsightSubprocessService {
+const FAKE_NCU = 'C:\\Program Files\\NVIDIA Corporation\\Nsight Compute 2025.1.0\\ncu.exe'
+
+/**
+ * Build an argv-aware mock subprocess service: where.exe (the resolution
+ * helper) answers with `whereOutput`/`whereExit`, everything else (the ncu
+ * spawn itself) answers with `stdout`/`stderr`/`exitCode`.
+ */
+function mockSubprocess(
+  stdout: string,
+  stderr = '',
+  exitCode = 0,
+  where: { output: string; exitCode: number } = { output: FAKE_NCU, exitCode: 0 },
+): NsightSubprocessService {
   const { Readable, PassThrough } = require('node:stream') as typeof import('node:stream')
   const nullSink = new PassThrough()
   nullSink.resume()
   return {
-    spawn(_spec) {
+    spawn(spec) {
+      const isWhereHelper = spec.argv[0]?.toLowerCase().includes('where.exe') === true
+        || spec.argv[0] === '/usr/bin/which'
+      const response = isWhereHelper ? where : { output: stdout, exitCode }
+      const errText = isWhereHelper ? '' : stderr
       return {
         stdin: nullSink,
-        stdout: Readable.from([stdout]),
-        stderr: Readable.from([stderr]),
+        stdout: Readable.from([response.output]),
+        stderr: Readable.from([errText]),
         collected: {},
-        done: Promise.resolve({ exitCode, signal: null }),
+        done: Promise.resolve({ exitCode: response.exitCode, signal: null }),
         terminate() { /* no-op */ },
         waitForExit: () => Promise.resolve(true),
       }
     },
   }
 }
+
+describe('resolveNcuExecutable', () => {
+  it('explicit ncuPath wins without consulting where.exe or the glob', async () => {
+    const calls: string[] = []
+    const result = await resolveNcuExecutable({
+      ncuPath: 'D:\\tools\\ncu.exe',
+      subprocess: {
+        spawn(spec) {
+          calls.push(spec.argv[0] ?? '')
+          throw new Error('should not spawn')
+        },
+      },
+    })
+    expect(result).toEqual({ path: 'D:\\tools\\ncu.exe', source: 'explicit' })
+    expect(calls).toHaveLength(0)
+  })
+
+  it('where.exe hit resolves the absolute ncu.exe path (source: where)', async () => {
+    const result = await resolveNcuExecutable({
+      subprocess: mockSubprocess('', '', 0, { output: `${FAKE_NCU}\r\nC:\\other\\ncu.bat\r\n`, exitCode: 0 }),
+    })
+    expect(result).toEqual({ path: FAKE_NCU, source: 'where' })
+  })
+
+  it('where.exe returning only a .bat falls through to the glob fallback', async () => {
+    const root = await makeTempRoot()
+    const nc = path.join(root, 'Nsight Compute 2024.1.0')
+    mkdirSync(nc, { recursive: true })
+    writeFileSync(path.join(nc, 'ncu.exe'), 'stub')
+    const result = await resolveNcuExecutable({
+      subprocess: mockSubprocess('', '', 0, { output: 'C:\\other\\ncu.bat\r\n', exitCode: 0 }),
+      globParent: root,
+    })
+    expect(result.source).toBe('glob')
+    expect(result.path).toContain('Nsight Compute 2024.1.0')
+  })
+
+  it('where.exe failure falls through to the glob fallback', async () => {
+    const root = await makeTempRoot()
+    const nc = path.join(root, 'Nsight Compute 2025.1.0')
+    mkdirSync(nc, { recursive: true })
+    writeFileSync(path.join(nc, 'ncu.exe'), 'stub')
+    const result = await resolveNcuExecutable({
+      subprocess: mockSubprocess('', '', 0, { output: 'INFO: Could not find files', exitCode: 1 }),
+      globParent: root,
+    })
+    expect(result).toEqual({ path: path.join(nc, 'ncu.exe'), source: 'glob' })
+  })
+
+  it('both where.exe and the glob failing produce the install-guidance error with searched locations', async () => {
+    const root = await makeTempRoot()
+    await expect(resolveNcuExecutable({
+      subprocess: mockSubprocess('', '', 0, { output: '', exitCode: 1 }),
+      globParent: path.join(root, 'does-not-exist'),
+    })).rejects.toThrow(/Install Nsight Compute/)
+    await expect(resolveNcuExecutable({
+      subprocess: mockSubprocess('', '', 0, { output: '', exitCode: 1 }),
+      globParent: path.join(root, 'does-not-exist'),
+    })).rejects.toThrow(/Searched/)
+  })
+
+  it('globNcuInstall picks the NEWEST version directory', async () => {
+    const root = await makeTempRoot()
+    for (const version of ['2024.3.1', '2025.1.0', '2023.2.0']) {
+      const dir = path.join(root, `Nsight Compute ${version}`)
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(path.join(dir, 'ncu.exe'), 'stub')
+    }
+    expect(globNcuInstall(root)).toBe(path.join(root, 'Nsight Compute 2025.1.0', 'ncu.exe'))
+  })
+
+  it('globNcuInstall resolves the NESTED 2025.x layout (target/windows-desktop-win7-x64/ncu.exe) when no top-level exe exists', async () => {
+    const root = await makeTempRoot()
+    // The real Nsight Compute 2025.1.0 layout on this host: only ncu.bat at
+    // the top level; the exe lives under target\windows-desktop-win7-x64\.
+    const dir = path.join(root, 'Nsight Compute 2025.1.0')
+    mkdirSync(path.join(dir, 'target', 'windows-desktop-win7-x64'), { recursive: true })
+    writeFileSync(path.join(dir, 'ncu.bat'), '@echo off\r\n"%~dp0\\target\\windows-desktop-win7-x64\\ncu.exe" %*\r\n')
+    writeFileSync(path.join(dir, 'target', 'windows-desktop-win7-x64', 'ncu.exe'), 'stub')
+    expect(globNcuInstall(root)).toBe(path.join(dir, 'target', 'windows-desktop-win7-x64', 'ncu.exe'))
+  })
+
+  it('globNcuInstall skips version directories without ncu.exe', async () => {
+    const root = await makeTempRoot()
+    mkdirSync(path.join(root, 'Nsight Compute 2025.2.0'), { recursive: true }) // no exe
+    const older = path.join(root, 'Nsight Compute 2024.1.0')
+    mkdirSync(older, { recursive: true })
+    writeFileSync(path.join(older, 'ncu.exe'), 'stub')
+    expect(globNcuInstall(root)).toBe(path.join(older, 'ncu.exe'))
+  })
+})
 
 describe('runNsightBench (mocked subprocess)', () => {
   it('parses a successful ncu CSV report end-to-end', async () => {
@@ -218,25 +328,32 @@ describe('runNsightBench (mocked subprocess)', () => {
     expect(result.notes.some(note => note.includes('no CUDA kernels were launched'))).toBe(true)
   })
 
-  it('throws a clean error with install guidance when ncu is missing', async () => {
+  it('throws install guidance when the RESOLVED ncu path cannot be spawned (ENOENT at spawn)', async () => {
     const root = await makeTempRoot()
+    // where.exe resolves a stale path; the ncu spawn itself then fails ENOENT
+    // (e.g. uninstalled after PATH registration) → clean guidance, not a crash.
+    const service: NsightSubprocessService = {
+      spawn(spec) {
+        if (spec.argv[0]?.toLowerCase().includes('where.exe') === true) {
+          return mockSubprocess('').spawn(spec)
+        }
+        throw new Error('spawn ENOENT')
+      },
+    }
     await expect(runNsightBench({
       command: 'python bench.py',
-      subprocess: {
-        spawn() {
-          throw new Error('spawn ENOENT')
-        },
-      } as unknown as NsightSubprocessService,
+      subprocess: service,
       cwd: root,
     })).rejects.toThrow(/Install Nsight Compute/)
+    void root
   })
 
-  it('builds the correct ncu argv from the command and metric set', async () => {
+  it('builds the correct ncu argv: the RESOLVED absolute path leads the target command', async () => {
     const root = await makeTempRoot()
-    let capturedArgv: readonly string[] | undefined
+    const captured: string[][] = []
     const spyService: NsightSubprocessService = {
       spawn(spec) {
-        capturedArgv = [...spec.argv]
+        captured.push([...spec.argv])
         const { Readable, PassThrough } = require('node:stream') as typeof import('node:stream')
         const nullSink = new PassThrough()
         nullSink.resume()
@@ -256,16 +373,19 @@ describe('runNsightBench (mocked subprocess)', () => {
       metrics: ['gpu__time_duration.sum'],
       subprocess: spyService,
       cwd: root,
+      ncuPath: FAKE_NCU,
     })
-    expect(capturedArgv).toBeDefined()
-    expect(capturedArgv![0]).toBe('ncu')
-    expect(capturedArgv).toContain('--csv')
-    expect(capturedArgv).toContain('--metrics')
-    expect(capturedArgv).toContain('gpu__time_duration.sum')
-    expect(capturedArgv).toContain('--target-processes')
-    expect(capturedArgv).toContain('all')
-    expect(capturedArgv).toContain('python')
-    expect(capturedArgv).toContain('bench.py')
+    // Explicit ncuPath short-circuits resolution: exactly one spawn — ncu itself.
+    expect(captured).toHaveLength(1)
+    const ncuArgv = must(captured[0])
+    expect(ncuArgv[0]).toBe(FAKE_NCU)
+    expect(ncuArgv).toContain('--csv')
+    expect(ncuArgv).toContain('--metrics')
+    expect(ncuArgv).toContain('gpu__time_duration.sum')
+    expect(ncuArgv).toContain('--target-processes')
+    expect(ncuArgv).toContain('all')
+    expect(ncuArgv).toContain('python')
+    expect(ncuArgv).toContain('bench.py')
   })
 })
 

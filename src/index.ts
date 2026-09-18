@@ -88,6 +88,7 @@ export const Config: Schema<PluginConfig> = Schema.object({
     model: Schema.string(),
   }).default(undefined as unknown as { provider: string; model: string }),
   estimate: Schema.union(['off', 'rco'] as const).default(DEFAULT_CONFIG.estimate),
+  nsightNcuPath: Schema.string().default(undefined as unknown as string),
 })
 
 /** Default workspace root when a tool call carries no session workspace. */

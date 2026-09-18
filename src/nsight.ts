@@ -341,6 +341,11 @@ export interface NsightBenchOptions {
   cwd?: string
   /** Wall-clock budget in milliseconds (default 120000). */
   timeout?: number
+  /**
+   * Explicit ncu path override (plugin config `nsightNcuPath` or the tool
+   * argument). When unset, the executable is resolved at execute time.
+   */
+  ncuPath?: string
   /** The subprocess seam. */
   subprocess: NsightSubprocessService
   signal?: AbortSignal
@@ -368,6 +373,149 @@ function collectStream(stream: import('node:stream').Readable | undefined): Prom
   })
 }
 
+// ---------------------------------------------------------------------------
+// ncu executable resolution (the subprocess seam's scrubbed PATH does not
+// include the Nsight Compute directory; bare `ncu` does not resolve — and on
+// Windows the PATH hit is ncu.bat, which the argv-based seam cannot execute)
+// ---------------------------------------------------------------------------
+
+/** How the ncu executable was resolved. */
+export type NcuResolutionSource = 'explicit' | 'where' | 'glob'
+
+/** The resolved absolute ncu executable path plus its provenance. */
+export interface NcuResolution {
+  path: string
+  source: NcuResolutionSource
+}
+
+/** One run of a helper executable (where.exe) via the subprocess seam. */
+async function runHelper(argv: readonly string[], subprocess: NsightSubprocessService, signal?: AbortSignal): Promise<{ stdout: string; exitCode: number | null }> {
+  const handle = subprocess.spawn({
+    argv,
+    cwd: process.cwd(),
+    stdio: { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' },
+    graceMs: 1000,
+    ...(signal !== undefined ? { signal } : {}),
+  })
+  const stdoutPromise = collectStream(handle.stdout)
+  const done = await handle.done
+  const stdout = await stdoutPromise
+  return { stdout, exitCode: done.exitCode }
+}
+
+/** The common Nsight Compute install locations searched when `where` fails. */
+export const NSIGHT_SEARCH_LOCATIONS: readonly string[] = [
+  'C:\\Program Files\\NVIDIA Corporation\\Nsight Compute *\\ncu.exe',
+  'C:\\Program Files\\NVIDIA Corporation\\Nsight Compute *\\target\\windows-desktop-win7-x64\\ncu.exe',
+]
+
+/** The parent directory globbed for Nsight Compute version folders (test seam). */
+const NSIGHT_GLOB_PARENT = 'C:\\Program Files\\NVIDIA Corporation'
+
+/**
+ * Glob the common Nsight Compute install locations and return the newest
+ * `ncu.exe`, or undefined. Version directories sort numerically descending
+ * ("Nsight Compute 2025.1.0" > "Nsight Compute 2024.3.1").
+ *
+ * Two layouts are checked per version directory (verified against a real
+ * Nsight Compute 2025.1.0 install):
+ * - `<dir>\ncu.exe` — some installs expose the exe at the top level;
+ * - `<dir>\target\windows-desktop-win7-x64\ncu.exe` — the 2025.x layout,
+ *   which is what the shipped `ncu.bat` wrapper (`"%~dp0\target\...ncu.exe"`)
+ *   invokes. Spawning this exe directly is equivalent to the wrapper without
+ *   requiring a shell (the argv-based seam never shell-interprets, so the
+ *   .bat itself cannot be spawned).
+ */
+export function globNcuInstall(parent: string = NSIGHT_GLOB_PARENT): string | undefined {
+  const fs = require('node:fs') as typeof import('node:fs')
+  const path = require('node:path') as typeof import('node:path')
+  let entries: string[]
+  try {
+    entries = fs.readdirSync(parent)
+  } catch {
+    return undefined
+  }
+  const versionOf = (name: string): number[] => {
+    const match = /Nsight Compute (\d+)\.(\d+)(?:\.(\d+))?/u.exec(name)
+    if (match === null) return []
+    return [Number(match[1]), Number(match[2]), Number(match[3] ?? 0)]
+  }
+  const candidates = entries
+    .filter(name => versionOf(name).length > 0)
+    .sort((a, b) => {
+      const va = versionOf(a)
+      const vb = versionOf(b)
+      for (let i = 0; i < 3; i++) {
+        if ((vb[i] ?? 0) !== (va[i] ?? 0)) return (vb[i] ?? 0) - (va[i] ?? 0)
+      }
+      return b.localeCompare(a)
+    })
+  for (const candidate of candidates) {
+    const dir = path.join(parent, candidate)
+    for (const relative of ['ncu.exe', path.join('target', 'windows-desktop-win7-x64', 'ncu.exe')]) {
+      const exe = path.join(dir, relative)
+      try {
+        if (fs.statSync(exe).isFile()) return exe
+      } catch {
+        continue
+      }
+    }
+  }
+  return undefined
+}
+
+/**
+ * Resolve the ncu executable to an ABSOLUTE PATH before spawning.
+ *
+ * Order (the lead's spec):
+ * 1. `ncuPath` explicit override (plugin config or tool argument) — used as-is.
+ * 2. `where.exe ncu` via ctx.subprocess (System32 is always reachable — it
+ *    resolves the FULL system PATH including the Nsight Compute dir). The
+ *    first `ncu.exe` hit wins; `.bat` hits are skipped (the argv-based seam
+ *    never shell-interprets, so a .bat wrapper cannot be spawned).
+ * 3. Glob the common install locations (`C:\Program Files\NVIDIA
+ *    Corporation\Nsight Compute *\ncu.exe`, newest version first).
+ * 4. Fail with the install-guidance error listing the searched locations.
+ *
+ * @throws Error with install guidance when every step fails.
+ */
+export async function resolveNcuExecutable(options: {
+  ncuPath?: string
+  subprocess: NsightSubprocessService
+  signal?: AbortSignal
+  /** Test seam: overrides the globbed parent directory. */
+  globParent?: string
+}): Promise<NcuResolution> {
+  if (options.ncuPath !== undefined && options.ncuPath.trim() !== '') {
+    return { path: options.ncuPath.trim(), source: 'explicit' }
+  }
+
+  // Windows: `where.exe ncu` (System32 is always reachable even though the
+  // scrubbed child PATH is not). POSIX: `which ncu`.
+  const helper = process.platform === 'win32'
+    ? ['C:\\Windows\\System32\\where.exe', 'ncu']
+    : ['/usr/bin/which', 'ncu']
+  try {
+    const { stdout, exitCode } = await runHelper(helper, options.subprocess, options.signal)
+    if (exitCode === 0) {
+      const lines = stdout.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0)
+      const exe = lines.find(line => line.toLowerCase().endsWith('ncu.exe'))
+      if (exe !== undefined) return { path: exe, source: 'where' }
+    }
+  } catch {
+    // where.exe unavailable/failed — fall through to the glob.
+  }
+
+  const globbed = globNcuInstall(options.globParent)
+  if (globbed !== undefined) return { path: globbed, source: 'glob' }
+
+  throw new Error(
+    'nsight bench: the `ncu` executable was not found. Install Nsight Compute (standalone) or the CUDA toolkit '
+    + 'and ensure ncu is on the system PATH, or pass an explicit ncuPath. Searched: `where ncu` (system PATH) '
+    + `and ${NSIGHT_SEARCH_LOCATIONS.join(', ')}. See https://developer.nvidia.com/nsight-compute`,
+  )
+}
+
 /**
  * Run one `ncu --csv --metrics <joined> --target-processes all <command>`
  * benchmark through the subprocess seam and parse the CSV report.
@@ -386,7 +534,16 @@ export async function runNsightBench(options: NsightBenchOptions): Promise<Nsigh
   if (commandParts.length === 0) {
     throw new Error('nsight bench: the command parameter must name a kernel runner (e.g. "python bench_kernel.py")')
   }
-  const argv = ['ncu', '--csv', '--metrics', metrics.join(','), '--target-processes', 'all', ...commandParts]
+  // Resolve ncu to an ABSOLUTE PATH before spawning: the subprocess seam's
+  // scrubbed PATH does not include the Nsight Compute directory (bare `ncu`
+  // → spawn ENOENT), and the PATH hit is ncu.bat, which the argv-based seam
+  // cannot execute. ncu.exe is preferred over the .bat wrapper.
+  const resolution = await resolveNcuExecutable({
+    ...(options.ncuPath !== undefined ? { ncuPath: options.ncuPath } : {}),
+    subprocess: options.subprocess,
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+  })
+  const argv = [resolution.path, '--csv', '--metrics', metrics.join(','), '--target-processes', 'all', ...commandParts]
 
   const controller = new AbortController()
   const timeoutTimer = setTimeout(() => { controller.abort() }, timeoutMs)
@@ -409,8 +566,9 @@ export async function runNsightBench(options: NsightBenchOptions): Promise<Nsigh
       const message = error instanceof Error ? error.message : String(error)
       if (message.includes('ENOENT') || message.includes('not found') || message.includes('cannot find')) {
         throw new Error(
-          'nsight bench: the `ncu` executable was not found. Install Nsight Compute (standalone) or the CUDA toolkit '
-          + 'and ensure ncu is on the PATH. See https://developer.nvidia.com/nsight-compute',
+          `nsight bench: the resolved ncu executable "${resolution.path}" (${resolution.source}) could not be `
+          + 'spawned. Install Nsight Compute (standalone) or the CUDA toolkit, ensure ncu is on the system PATH, '
+          + 'or pass an explicit ncuPath. See https://developer.nvidia.com/nsight-compute',
         )
       }
       throw new Error(`nsight bench: failed to spawn ncu: ${message}`)

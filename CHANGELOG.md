@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.3 — progression rework: iteration scatter + Pareto frontier
+
+- **Reworked by user directive**: the progression chart now plots EVERY logged
+  discovery attempt across all rounds — x = global iteration index
+  (chronological: round order, then file/lineage order within each round).
+  Valid attempts draw as solid dots, failed/invalid/unevaluated ones as
+  hollow dots (score 0 included — the climb story is honest), colored by
+  round through a cycled deterministic palette. The headline line is the
+  **Pareto frontier** (the monotone running maximum), step-drawn. Policy
+  markers moved to the iteration index where a new version first logged.
+  Hover per subpoint: round, node id, mechanism, score, valid/failClass.
+- **Removed** the per-round series and the AlphaEvolve 2.635 reference line.
+- Floored (−∞) scores plot clamped to the domain floor and are excluded from
+  the y domain (one −1e12 dot must not flatten the chart); they never win the
+  frontier.
+- Data: the refresh now also reads every round's `nodes.jsonl` (paged, capped)
+  and flattens it (`toIterationNodes`) — the same read the tree view uses,
+  no new files.
+- Tests: progression.spec rewritten (13 cases: cross-round iteration ordering,
+  subpoint counts, Pareto monotonicity + floored semantics, markers at
+  iteration indices, palette, thinning); the AlphaEvolve tests are gone.
+  Package suite: 46.
+
 ## 0.3.2 — progression chart
 
 - **Best-score-over-rounds chart** in the sidebar panel (after the champion

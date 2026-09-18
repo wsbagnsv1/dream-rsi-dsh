@@ -8,6 +8,7 @@
  */
 import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
 import type { DreamRow, EventRow, NodeRow, PolicyRow, RoundRow, StoreConfig } from './read.ts'
+import type { IterationPoint } from './progression.ts'
 
 /** Everything the panel draws, derived from the store files at refresh time. */
 export interface DashboardData {
@@ -21,6 +22,10 @@ export interface DashboardData {
   rounds: RoundRow[]
   /** Whether the rounds list was cut by the read cap. */
   roundsTruncated: boolean
+  /** Every logged node across all rounds, chronological (the progression's subpoints). */
+  attempts: IterationPoint[]
+  /** Whether any round's nodes were cut by the read cap. */
+  attemptsTruncated: boolean
   /** Dream report rows, newest first. */
   dreams: DreamRow[]
   /** Whether the dreams list was cut by the read cap. */

@@ -13,6 +13,8 @@ function sampleData(rounds = 1): DashboardData {
     activeVersion: 'v0001',
     rounds: Array.from({ length: rounds }, (_, index) => ({ roundId: `r000${index + 1}`, bestScore: 1 })),
     roundsTruncated: false,
+    attempts: [],
+    attemptsTruncated: false,
     dreams: [],
     dreamsTruncated: false,
     events: [],

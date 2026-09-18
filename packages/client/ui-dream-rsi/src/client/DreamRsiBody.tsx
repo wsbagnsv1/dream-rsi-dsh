@@ -14,7 +14,7 @@ import { IconRefreshOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
 import { deriveChampion, FLOORED_SCORE, totalNodes } from './read.ts'
 import type { DreamRow, PolicyRow, RoundRow } from './read.ts'
-import { computeProgression, REFERENCE_SCORE } from './progression.ts'
+import { computeProgression } from './progression.ts'
 import { ProgressionChart } from './ProgressionChart.tsx'
 import type { DashboardData, DreamRsiTabState, createDreamRsiStore } from './store.ts'
 import type { DreamRsiInjected } from './face.ts'
@@ -257,17 +257,15 @@ function EventsTail({ data, t }: { data: DashboardData; t: PropsLocale<'dreamRsi
   )
 }
 
-/** The progression section: the climb curve over the dashboard's rounds. */
+/** The progression section: every iteration's subpoint and the Pareto frontier. */
 function ProgressionSection({ data, t }: { data: DashboardData; t: PropsLocale<'dreamRsi'>['t'] }): ReactNode {
-  const progression = useMemo(
-    () => computeProgression(data.rounds, { referenceLine: REFERENCE_SCORE }),
-    [data.rounds],
-  )
+  const progression = useMemo(() => computeProgression(data.attempts), [data.attempts])
   if (progression.points.length === 0) return null
   return (
     <div style={css.card} data-dream-rsi='progression-card'>
       <div style={css.cardTitle}>{t('progress.title')}</div>
       <ProgressionChart progression={progression} t={t} />
+      {data.attemptsTruncated && <div style={css.note}>{t('tree.truncated', { count: data.attempts.length })}</div>}
     </div>
   )
 }

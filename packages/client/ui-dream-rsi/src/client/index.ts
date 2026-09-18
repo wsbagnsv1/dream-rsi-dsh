@@ -24,8 +24,8 @@ export type { DashboardData, DreamRsiState, DreamRsiTabState, LoadStatus, TreeSl
 export type { DreamRsiKey } from './locales.ts'
 export type { LayoutOptions, LayoutPosition, TreeLayout } from './tree-layout.ts'
 export { layoutTree, scoreColor } from './tree-layout.ts'
-export type { PolicyMarker, Progression, ProgressionPoint, ProgressionOptions } from './progression.ts'
-export { computeProgression, REFERENCE_SCORE, thinIndices, X_LABEL_CAP } from './progression.ts'
+export type { IterationPoint, PolicyMarker, Progression, RoundNodes } from './progression.ts'
+export { computeProgression, roundColor, thinIndices, toIterationNodes, X_LABEL_CAP } from './progression.ts'
 export type { ProgressionChartProps } from './ProgressionChart.tsx'
 export type {
   Champion, DreamRow, EventRow, NodeRow, PolicyIndex, PolicyRow, RoundRow, StoreConfig, TreeIndex,

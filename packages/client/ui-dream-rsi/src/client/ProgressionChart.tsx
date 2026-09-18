@@ -1,18 +1,22 @@
 /**
- * The progression chart: how fast the optimization climbs.
+ * The progression chart: every logged discovery attempt and the Pareto
+ * frontier through them.
  *
- * Two series over the same x (rounds, chronological): the per-round best
- * (thin line + hoverable points) and the running best (the monotone step
- * line — the climb curve). A dashed horizontal reference line marks the
- * benchmark to beat, and dashed vertical markers flag rounds where the
- * active policy version changed. Pure SVG over the precomputed progression
- * model (progression.ts) — no dependencies, no timers, no randomness.
+ * X is the GLOBAL ITERATION INDEX — one subpoint per logged node across all
+ * rounds, chronological (round order, then file order within each round).
+ * Valid attempts draw as solid dots, failed/invalid/unevaluated ones as
+ * hollow dots (score 0 included — the climb story is honest), both colored
+ * by round through a cycled deterministic palette. The headline line is the
+ * Pareto frontier: the monotone running maximum, step-drawn. Vertical
+ * dashed markers flag the iteration where the active policy version
+ * changed. Pure SVG over the precomputed progression model
+ * (progression.ts) — no dependencies, no timers, no randomness.
  */
 import { useMemo } from 'react'
 import type { ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import { REFERENCE_SCORE, thinIndices, X_LABEL_CAP } from './progression.ts'
-import type { Progression } from './progression.ts'
+import { roundColor, thinIndices, X_LABEL_CAP } from './progression.ts'
+import type { IterationPoint, Progression } from './progression.ts'
 import type {} from './locales.ts'
 
 /** The chart's props: the precomputed model and copy. */
@@ -25,14 +29,12 @@ export interface ProgressionChartProps {
 
 /** Chart geometry in viewBox units; the svg scales to the pane width. */
 const WIDTH = 640
-const HEIGHT = 240
+const HEIGHT = 260
 const MARGIN = { top: 26, right: 14, bottom: 24, left: 46 } as const
 /** Y-domain padding fraction beyond the data range. */
 const Y_PADDING = 0.08
 
-const PER_ROUND_COLOR = '#7a8694'
-const RUNNING_COLOR = '#1f8a5f'
-const REFERENCE_COLOR = '#b8860b'
+const PARETO_COLOR = '#1f8a5f'
 const MARKER_COLOR = '#8e7cc3'
 const GRID_COLOR = '#e4e7eb'
 const TEXT_COLOR = '#667085'
@@ -42,10 +44,10 @@ const css = {
   svg: { display: 'block', width: '100%', height: 'auto' } satisfies React.CSSProperties,
   legend: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', marginTop: 4, fontSize: 11, color: TEXT_COLOR } satisfies React.CSSProperties,
   legendItem: { display: 'inline-flex', alignItems: 'center', gap: 4 } satisfies React.CSSProperties,
-  legendLine: { width: 16, height: 0, borderTop: `2px solid ${RUNNING_COLOR}`, display: 'inline-block' } satisfies React.CSSProperties,
-  legendThin: { width: 16, height: 0, borderTop: `1px solid ${PER_ROUND_COLOR}`, display: 'inline-block' } satisfies React.CSSProperties,
-  legendDash: { width: 16, height: 0, borderTop: `1px dashed ${REFERENCE_COLOR}`, display: 'inline-block' } satisfies React.CSSProperties,
-  legendDot: { width: 8, height: 8, borderRadius: '50%', background: MARKER_COLOR, display: 'inline-block' } satisfies React.CSSProperties,
+  legendLine: { width: 16, height: 0, borderTop: `2px solid ${PARETO_COLOR}`, display: 'inline-block' } satisfies React.CSSProperties,
+  legendDot: { width: 8, height: 8, borderRadius: '50%', background: 'hsl(212, 58%, 48%)', display: 'inline-block' } satisfies React.CSSProperties,
+  legendHollow: { width: 8, height: 8, borderRadius: '50%', border: '1px solid hsl(212, 58%, 48%)', display: 'inline-block' } satisfies React.CSSProperties,
+  legendDash: { width: 16, height: 0, borderTop: `1px dashed ${MARKER_COLOR}`, display: 'inline-block' } satisfies React.CSSProperties,
 }
 
 /** Y-tick values: four evenly spaced values across the padded domain. */
@@ -61,62 +63,86 @@ function tickText(value: number): string {
 }
 
 /**
- * Draw the climb curve.
+ * Draw the iteration scatter with its Pareto frontier.
  * @param props - the progression model and copy.
  * @returns the SVG chart with its legend, or nothing without points.
  */
 export function ProgressionChart({ progression, t }: ProgressionChartProps): ReactNode {
   const { points, runningBest, markers, min, max } = progression
-  const hasReference = Number.isFinite(REFERENCE_SCORE)
+  const iterations = points.length
+
   const yMin = min - (max - min) * Y_PADDING
   const yMax = max + (max - min) * Y_PADDING
-
-  const scaleX = (index: number): number => points.length <= 1
+  const scaleX = (iteration: number): number => iterations <= 1
     ? MARGIN.left + (WIDTH - MARGIN.left - MARGIN.right) / 2
-    : MARGIN.left + (WIDTH - MARGIN.left - MARGIN.right) * (index / (points.length - 1))
+    : MARGIN.left + (WIDTH - MARGIN.left - MARGIN.right) * (iteration / (iterations - 1))
   const scaleY = (value: number): number =>
     HEIGHT - MARGIN.bottom - (HEIGHT - MARGIN.top - MARGIN.bottom) * ((value - yMin) / (yMax - yMin))
 
-  const perRoundPath = useMemo(
-    () => points.map((point, index) => `${index === 0 ? 'M' : 'L'}${scaleX(index).toFixed(1)},${scaleY(point.bestScore).toFixed(1)}`).join(' '),
-    // Recomputed only when the model changes; scaleX/scaleY are pure over it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [points, min, max],
+  // Round identity for coloring: chronological position of each round's first dot.
+  const roundOrder = useMemo(() => {
+    const order = new Map<string, number>()
+    for (const point of points) {
+      if (!order.has(point.roundId)) order.set(point.roundId, order.size)
+    }
+    return order
+  }, [points])
+
+  // X labels at round starts (the first iteration of each round), thinned.
+  const roundStarts = useMemo(() => {
+    const starts = new Map<string, number>()
+    for (const point of points) {
+      if (!starts.has(point.roundId)) starts.set(point.roundId, point.iteration)
+    }
+    return [...starts.entries()].map(([roundId, iteration]) => ({ roundId, iteration }))
+  }, [points])
+  const keptStarts = useMemo(
+    () => new Set(thinIndices(roundStarts.length).map(position => roundStarts[position]?.roundId)),
+    [roundStarts],
   )
-  const runningPath = useMemo(() => {
+
+  const paretoPath = useMemo(() => {
     if (points.length === 0) return ''
-    const segments: string[] = [`M${scaleX(0).toFixed(1)},${scaleY(runningBest[0] ?? 0).toFixed(1)}`]
-    for (let index = 1; index < points.length; index += 1) {
-      const previous = runningBest[index - 1] ?? 0
-      const current = runningBest[index] ?? 0
+    const segments: string[] = []
+    let started = false
+    for (let index = 0; index < points.length; index += 1) {
+      const value = runningBest[index]
+      if (value === undefined) continue
       const x = scaleX(index)
-      // hv step: horizontal at the previous running best, then vertical jump.
-      segments.push(`L${x.toFixed(1)},${scaleY(previous).toFixed(1)}`)
-      segments.push(`L${x.toFixed(1)},${scaleY(current).toFixed(1)}`)
+      const y = scaleY(value)
+      if (!started) {
+        segments.push(`M${x.toFixed(1)},${y.toFixed(1)}`)
+        started = true
+        continue
+      }
+      const previous = runningBest[index - 1]
+      if (previous !== value) {
+        // hv step: horizontal at the previous frontier, then the jump.
+        segments.push(`L${x.toFixed(1)},${scaleY(previous ?? value).toFixed(1)}`)
+      }
+      segments.push(`L${x.toFixed(1)},${y.toFixed(1)}`)
     }
     return segments.join(' ')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [points, min, max])
 
   if (points.length === 0) return null
-  const referenceY = hasReference ? scaleY(REFERENCE_SCORE) : 0
-  const labelIndices = new Set(thinIndices(points.length))
 
-  const tooltipOf = (index: number): string => {
-    const point = points[index]
-    if (point === undefined) return ''
+  const tooltipOf = (point: IterationPoint): string => {
+    const scoreText = point.floored ? '−∞' : tickText(point.score)
     const lines = [
-      point.roundId,
-      `${t('rounds.best')}: ${tickText(point.bestScore)}`,
-      point.policyVersion === undefined ? undefined : `${t('rounds.policy')}: ${point.policyVersion}`,
-      point.nodes === undefined ? undefined : `${t('rounds.nodes')}: ${String(point.nodes)}`,
-      `${t('progress.runningBest')}: ${tickText(runningBest[index] ?? point.bestScore)}`,
+      `${point.roundId} · ${point.nodeId}`,
+      point.mechanism,
+      `${t('rounds.best')}: ${scoreText}`,
+      point.evaluated
+        ? point.valid ? t('progress.valid') : `${t('progress.failed')}${point.failClass === undefined ? '' : ` (${point.failClass})`}`
+        : t('tree.unscored'),
     ]
     return lines.filter(line => line !== undefined).join('\n')
   }
 
   return (
-    <div data-dream-rsi='progression' data-dream-rsi-points={String(points.length)}>
+    <div data-dream-rsi='progression' data-dream-rsi-points={String(iterations)}>
       <svg
         style={css.svg}
         viewBox={`0 0 ${String(WIDTH)} ${String(HEIGHT)}`}
@@ -135,23 +161,23 @@ export function ProgressionChart({ progression, t }: ProgressionChartProps): Rea
             </g>
           )
         })}
-        {/* x labels, thinned */}
-        {points.map((point, index) => labelIndices.has(index)
+        {/* x labels at round starts, thinned */}
+        {roundStarts.map((start) => keptStarts.has(start.roundId)
           ? (
               <text
-                key={`x-${point.roundId}`}
-                x={scaleX(index)} y={HEIGHT - 8}
+                key={`x-${start.roundId}`}
+                x={scaleX(start.iteration)} y={HEIGHT - 8}
                 textAnchor='middle' fontSize={9} fill={TEXT_COLOR}
               >
-                {point.roundId}
+                {start.roundId}
               </text>
             )
           : undefined)}
-        {/* policy-change markers */}
+        {/* policy-change markers at iteration indices */}
         {markers.map((marker) => {
-          const x = scaleX(marker.index)
+          const x = scaleX(marker.iteration)
           return (
-            <g key={`marker-${marker.roundId}`}>
+            <g key={`marker-${marker.nodeId}`}>
               <line
                 x1={x} y1={MARGIN.top - 6} x2={x} y2={HEIGHT - MARGIN.bottom}
                 stroke={MARKER_COLOR} strokeWidth={1} strokeDasharray='3,3'
@@ -159,58 +185,56 @@ export function ProgressionChart({ progression, t }: ProgressionChartProps): Rea
               <text x={x + 3} y={MARGIN.top - 9} fontSize={9} fill={MARKER_COLOR}>
                 {marker.version}
               </text>
-              <title>{`${marker.roundId}: ${marker.previousVersion ?? '·'} → ${marker.version}`}</title>
+              <title>{`${marker.roundId}/${marker.nodeId}: ${marker.previousVersion ?? '·'} → ${marker.version}`}</title>
             </g>
           )
         })}
-        {/* reference line */}
-        {hasReference && (
-          <g>
-            <line
-              x1={MARGIN.left} y1={referenceY} x2={WIDTH - MARGIN.right} y2={referenceY}
-              stroke={REFERENCE_COLOR} strokeWidth={1.5} strokeDasharray='6,4'
-            />
-            <text x={WIDTH - MARGIN.right - 4} y={referenceY - 4} textAnchor='end' fontSize={10} fill={REFERENCE_COLOR}>
-              {t('progress.reference', { score: tickText(REFERENCE_SCORE) })}
-            </text>
-          </g>
-        )}
-        {/* per-round best */}
-        <path d={perRoundPath} fill='none' stroke={PER_ROUND_COLOR} strokeWidth={1} opacity={0.9} />
-        {/* running best (the climb curve) */}
-        <path d={runningPath} fill='none' stroke={RUNNING_COLOR} strokeWidth={2.5} strokeLinejoin='round' />
-        {/* hoverable points */}
-        {points.map((point, index) => (
-          <circle
-            key={point.roundId}
-            cx={scaleX(index)} cy={scaleY(point.bestScore)} r={3.5}
-            fill={PER_ROUND_COLOR}
-            data-dream-rsi-point={point.roundId}
-            data-dream-rsi-best={String(point.bestScore)}
-          >
-            <title>{tooltipOf(index)}</title>
-          </circle>
-        ))}
+        {/* subpoints: valid solid, failed/invalid/unevaluated hollow; colored by round */}
+        {points.map((point) => {
+          const x = scaleX(point.iteration)
+          const clamped = point.floored ? Math.max(yMin, point.score) : point.score
+          const y = scaleY(clamped)
+          const hue = roundColor(roundOrder.get(point.roundId) ?? 0)
+          const solid = point.valid
+          return (
+            <circle
+              key={point.nodeId}
+              cx={x} cy={y} r={solid ? 3 : 2.8}
+              fill={solid ? hue : 'transparent'}
+              stroke={hue}
+              strokeWidth={solid ? 0 : 1.2}
+              opacity={point.evaluated ? 1 : 0.55}
+              data-dream-rsi-point={point.nodeId}
+              data-dream-rsi-round={point.roundId}
+              data-dream-rsi-score={String(point.score)}
+              data-dream-rsi-valid={String(point.valid)}
+            >
+              <title>{tooltipOf(point)}</title>
+            </circle>
+          )
+        })}
+        {/* Pareto frontier on top */}
+        <path d={paretoPath} fill='none' stroke={PARETO_COLOR} strokeWidth={2.5} strokeLinejoin='round' />
       </svg>
       <div style={css.legend}>
         <span style={css.legendItem}>
-          <span style={css.legendLine} />{t('progress.runningBest')}
+          <span style={css.legendLine} />{t('progress.pareto')}
         </span>
         <span style={css.legendItem}>
-          <span style={css.legendThin} />{t('progress.perRound')}
+          <span style={css.legendDot} />{t('progress.valid')}
         </span>
         <span style={css.legendItem}>
-          <span style={css.legendDash} />{t('progress.reference', { score: tickText(REFERENCE_SCORE) })}
+          <span style={css.legendHollow} />{t('progress.failed')}
         </span>
         {markers.length > 0 && (
           <span style={css.legendItem}>
-            <span style={css.legendDot} />{t('progress.markers')}
+            <span style={css.legendDash} />{t('progress.markers')}
           </span>
         )}
       </div>
-      {points.length > X_LABEL_CAP && (
+      {iterations > X_LABEL_CAP && (
         <div style={{ fontSize: 10, color: TEXT_COLOR, marginTop: 2 }}>
-          {`${String(points.length)} · ${points[0]?.roundId ?? ''} → ${points[points.length - 1]?.roundId ?? ''}`}
+          {`${String(iterations)} ${t('progress.attempts')} · ${points[0]?.roundId ?? ''} → ${points[points.length - 1]?.roundId ?? ''}`}
         </div>
       )}
     </div>

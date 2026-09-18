@@ -25,6 +25,8 @@ import {
   parseStoreConfig, STORE_DIR,
 } from './read.ts'
 import type { DreamRow, EventRow, NodeRow, PolicyRow, RoundRow } from './read.ts'
+import { toIterationNodes } from './progression.ts'
+import type { RoundNodes } from './progression.ts'
 import type { DashboardData, createDreamRsiStore } from './store.ts'
 
 /** How many recent rounds the panel reads (older ones are cut). */
@@ -217,12 +219,25 @@ export async function load(
   const dreamRows: DreamRow[] = dreams?.dreams ?? []
   const events: EventRow[] = eventsPage === undefined ? [] : parseEventsPage(eventsPage.text)
 
+  // Phase 2: every round's nodes, for the iteration progression. Rounds are
+  // few (the listing cap); each read pages internally. A round whose nodes
+  // fail to read contributes nothing — the same degrade-softly discipline.
+  const nodeLists = await Promise.all(rounds.map(async (round): Promise<RoundNodes> => {
+    const outcome = await loadNodes(remote, sessionId, round.roundId, signal)
+    return outcome.kind === 'loaded'
+      ? { roundId: round.roundId, nodes: outcome.nodes, truncated: outcome.truncated }
+      : { roundId: round.roundId, nodes: [], truncated: false }
+  }))
+  const { iterations, truncated: nodesTruncated } = toIterationNodes(nodeLists)
+
   const data: DashboardData = {
     config: configText === undefined ? undefined : parseStoreConfig(configText),
     policies,
     activeVersion: index?.activeVersion,
     rounds,
     roundsTruncated: trees?.truncated ?? false,
+    attempts: iterations,
+    attemptsTruncated: nodesTruncated,
     dreams: dreamRows,
     dreamsTruncated: dreams?.truncated ?? false,
     events,

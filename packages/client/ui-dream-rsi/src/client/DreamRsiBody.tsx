@@ -14,6 +14,8 @@ import { IconRefreshOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
 import { deriveChampion, FLOORED_SCORE, totalNodes } from './read.ts'
 import type { DreamRow, PolicyRow, RoundRow } from './read.ts'
+import { computeProgression, REFERENCE_SCORE } from './progression.ts'
+import { ProgressionChart } from './ProgressionChart.tsx'
 import type { DashboardData, DreamRsiTabState, createDreamRsiStore } from './store.ts'
 import type { DreamRsiInjected } from './face.ts'
 import { TreeGraph } from './TreeGraph.tsx'
@@ -255,6 +257,21 @@ function EventsTail({ data, t }: { data: DashboardData; t: PropsLocale<'dreamRsi
   )
 }
 
+/** The progression section: the climb curve over the dashboard's rounds. */
+function ProgressionSection({ data, t }: { data: DashboardData; t: PropsLocale<'dreamRsi'>['t'] }): ReactNode {
+  const progression = useMemo(
+    () => computeProgression(data.rounds, { referenceLine: REFERENCE_SCORE }),
+    [data.rounds],
+  )
+  if (progression.points.length === 0) return null
+  return (
+    <div style={css.card} data-dream-rsi='progression-card'>
+      <div style={css.cardTitle}>{t('progress.title')}</div>
+      <ProgressionChart progression={progression} t={t} />
+    </div>
+  )
+}
+
 /**
  * The discovery-tree section: round selector, best-path toggle, and the SVG
  * graph of the selected round's nodes. The tree slice loads on demand — the
@@ -411,6 +428,8 @@ export function DreamRsiBody({
       {data !== undefined && (
         <>
           <ChampionCard data={data} t={t} />
+
+          <ProgressionSection data={data} t={t} />
 
           {state !== undefined && (
             <TreeSection tabId={tab.id} signal={signal} state={state} selectRound={selectRound} t={t} />

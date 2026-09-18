@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.2 — progression chart
+
+- **Best-score-over-rounds chart** in the sidebar panel (after the champion
+  card, above the discovery tree): the per-round best series, the monotone
+  running-best climb curve (hv step line), a dashed AlphaEvolve 2.635
+  reference line that participates in the y domain (the crossing is always
+  visible), and vertical policy-change markers where the active version
+  changed between consecutive rounds (versionless rounds neither create nor
+  clear a marker). Hover tooltips per round (bestScore, policyVersion,
+  nodes, running best); x labels thinned evenly; y auto-domain ±8% padding.
+- Pure model in `progression.ts` (chronological points, null-skip, running
+  best, markers, domain) — reuses the already-loaded `trees/*/round.json`
+  rows, zero new file reads, zero dependencies. Single-round stores render
+  one point; scoreless stores render no chart section.
+- Tests: +9 (ordering + null-skip, running-best monotonicity, marker
+  extraction incl. versionless gaps, domain ∪ reference, single-round edge,
+  empty stores, x-label thinning). Package suite: 42.
+
 ## 0.3.1 — discovery-tree graph view
 
 - **Graph view in the sidebar panel**: one selected round's discovery tree

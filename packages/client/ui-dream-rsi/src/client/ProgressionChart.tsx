@@ -105,22 +105,26 @@ export function ProgressionChart({ progression, t }: ProgressionChartProps): Rea
     if (points.length === 0) return ''
     const segments: string[] = []
     let started = false
+    let lastValue: number | undefined
     for (let index = 0; index < points.length; index += 1) {
       const value = runningBest[index]
+      // Before the first valid attempt the frontier does not exist yet.
       if (value === undefined) continue
       const x = scaleX(index)
       const y = scaleY(value)
       if (!started) {
         segments.push(`M${x.toFixed(1)},${y.toFixed(1)}`)
         started = true
+        lastValue = value
         continue
       }
-      const previous = runningBest[index - 1]
-      if (previous !== value) {
-        // hv step: horizontal at the previous frontier, then the jump.
-        segments.push(`L${x.toFixed(1)},${scaleY(previous ?? value).toFixed(1)}`)
+      // hv step: horizontal at the previous frontier value up to this x
+      // (carried across invalid gaps), then the jump when it moved.
+      if (lastValue !== undefined && lastValue !== value) {
+        segments.push(`L${x.toFixed(1)},${scaleY(lastValue).toFixed(1)}`)
       }
       segments.push(`L${x.toFixed(1)},${y.toFixed(1)}`)
+      lastValue = value
     }
     return segments.join(' ')
     // eslint-disable-next-line react-hooks/exhaustive-deps

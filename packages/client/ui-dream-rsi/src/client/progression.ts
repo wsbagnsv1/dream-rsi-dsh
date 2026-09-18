@@ -61,10 +61,12 @@ export interface Progression {
   /** Chronological subpoints (every logged node of every round). */
   points: IterationPoint[]
   /**
-   * Pareto frontier: runningBest[i] = max(score of points[0..i]); monotone
-   * non-decreasing. Floored (−∞) scores never win it.
+   * Pareto frontier over VALID attempts only: runningBest[i] = max(score of
+   * the valid points[0..i]); monotone non-decreasing where defined. Failed,
+   * invalid, and unevaluated attempts never shape it (and a floored −∞ score
+   * is invalid by construction). `undefined` before the first valid attempt.
    */
-  runningBest: number[]
+  runningBest: (number | undefined)[]
   /** Policy-change markers in chronological order. */
   markers: PolicyMarker[]
   /** Minimum plotted value over NON-floored scores, before padding. */
@@ -137,13 +139,16 @@ export function computeProgression(iterations: readonly IterationPoint[]): Progr
     lastSeenVersion = version
   }
 
-  const runningBest: number[] = []
+  // Pareto frontier over VALID attempts only (user amendment): failed,
+  // invalid, and unevaluated attempts stay visible as subpoints but never
+  // shape the line. Undefined until the first valid attempt lands.
+  const runningBest: (number | undefined)[] = []
   let best = Number.NEGATIVE_INFINITY
   for (const point of points) {
-    // A floored (−∞) score is the minimum the scorer emits; the plain max
-    // already never lets it win the frontier.
-    best = Math.max(best, point.floored ? Number.NEGATIVE_INFINITY : point.score)
-    runningBest.push(best)
+    if (point.valid && typeof point.score === 'number' && !Number.isNaN(point.score)) {
+      best = Math.max(best, point.score)
+    }
+    runningBest.push(best === Number.NEGATIVE_INFINITY ? undefined : best)
   }
 
   // Domain over non-floored scores: one −1e12 dot must not flatten the chart.

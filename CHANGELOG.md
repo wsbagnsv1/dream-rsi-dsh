@@ -12,6 +12,10 @@
   markers moved to the iteration index where a new version first logged.
   Hover per subpoint: round, node id, mechanism, score, valid/failClass.
 - **Removed** the per-round series and the AlphaEvolve 2.635 reference line.
+- **Amendment (user correction)**: the Pareto frontier is computed over VALID
+  attempts only — failed/invalid/unevaluated attempts stay visible as
+  subpoints but never shape the line ("best valid so far", carried forward
+  through invalid gaps; undefined until the first valid attempt).
 - Floored (−∞) scores plot clamped to the domain floor and are excluded from
   the y domain (one −1e12 dot must not flatten the chart); they never win the
   frontier.

@@ -109,14 +109,31 @@ describe('toIterationNodes', () => {
 })
 
 describe('computeProgression', () => {
-  it('builds a monotone Pareto frontier where floored scores never win', () => {
+  it('builds the Pareto frontier over VALID attempts only (failed never shapes it)', () => {
     const { iterations } = toIterationNodes(fixtureRounds())
     const progression = computeProgression(iterations)
-    expect(progression.runningBest).toEqual([0, 0.9598, 0.9598, 0.9598, 1.8, 1.8, 2.6359830849])
-    for (let index = 1; index < progression.runningBest.length; index += 1) {
-      expect(progression.runningBest[index])
-        .toBeGreaterThanOrEqual(progression.runningBest[index - 1] ?? Number.NaN)
+    // The frontier is "best valid so far": undefined before the first valid
+    // attempt, then carried forward — invalid attempts never move it.
+    expect(progression.runningBest).toEqual([
+      undefined, 0.9598, 0.9598, 0.9598, 1.8, 1.8, 2.6359830849,
+    ])
+    let last: number | undefined
+    for (const value of progression.runningBest) {
+      if (value === undefined) continue
+      expect(value).toBeGreaterThanOrEqual(last ?? Number.NEGATIVE_INFINITY)
+      last = value
     }
+  })
+
+  it('a failed attempt between two valid ones does NOT drop the frontier', () => {
+    const { iterations } = toIterationNodes(fixtureRounds())
+    const progression = computeProgression(iterations)
+    // r0001-n002 (failed, 0) sits between the valid 0.9598 and r0002's valid 1.8:
+    // the frontier carries 0.9598 straight through it (best so far never regresses).
+    expect(progression.runningBest[1]).toBe(0.9598)
+    expect(progression.runningBest[2]).toBe(0.9598)
+    expect(progression.runningBest[3]).toBe(0.9598) // carried across r0002's invalid root
+    expect(progression.runningBest[4]).toBe(1.8)
   })
 
   it('excludes floored scores from the y domain but keeps them as subpoints', () => {
@@ -154,8 +171,19 @@ describe('computeProgression', () => {
       { roundId: 'r0001', truncated: false, nodes: [node('n000', null, 0, { valid: false, evaluated: false, policyVersion: 'v0001' })] },
     ]).iterations)
     expect(single.points).toHaveLength(1)
-    expect(single.runningBest).toEqual([0])
+    expect(single.runningBest).toEqual([undefined]) // no valid attempt: no frontier yet
     expect(single.markers).toEqual([])
+  })
+
+  it('a forest with no valid attempts at all has no frontier (dots still render)', () => {
+    const progression = computeProgression(toIterationNodes([
+      { roundId: 'r0001', truncated: false, nodes: [
+        node('n000', null, 0, { valid: false, evaluated: false }),
+        node('n001', 'n000', -1e12, { valid: false, failClass: 'replay-illegal' }),
+      ] },
+    ]).iterations)
+    expect(progression.runningBest.every(value => value === undefined)).toBe(true)
+    expect(progression.points).toHaveLength(2)
   })
 
   it('an all-floored forest still renders (domain falls back, dots clamp)', () => {

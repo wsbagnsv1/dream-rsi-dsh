@@ -246,6 +246,27 @@ export function roundColor(index: number): string {
 }
 
 /**
+ * Slice the iteration sequence to a plotted window (the range control).
+ *
+ * The window bounds are INCLUSIVE global iteration indices; they are
+ * normalized (swapped when reversed, clamped to the data) so any input
+ * yields a valid, possibly empty window. The full range is the identity.
+ * computeProgression re-indexes whatever slice it receives, so the
+ * within-window frontier, markers, and domain all start at the window.
+ * @param iterations - the full chronological iteration sequence.
+ * @param from - first global iteration index of the window (clamped).
+ * @param to - last global iteration index of the window (clamped, ≥ from).
+ * @returns the window's points, in order.
+ */
+export function sliceWindow(iterations: readonly IterationPoint[], from: number, to: number): IterationPoint[] {
+  const last = iterations.length - 1
+  if (last < 0 || !Number.isFinite(from) || !Number.isFinite(to)) return []
+  const low = Math.min(Math.max(Math.floor(Math.min(from, to)), 0), last)
+  const high = Math.min(Math.max(Math.ceil(Math.max(from, to)), low), last)
+  return iterations.slice(low, high + 1)
+}
+
+/**
  * Thin a label list to at most {@link X_LABEL_CAP} entries, always keeping
  * the first and last.
  * @param count - the number of labels.

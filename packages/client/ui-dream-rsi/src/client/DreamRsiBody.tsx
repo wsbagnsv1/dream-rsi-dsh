@@ -14,7 +14,7 @@ import { IconRefreshOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
 import { deriveChampion, FLOORED_SCORE, totalNodes } from './read.ts'
 import type { DreamRow, PolicyRow, RoundRow } from './read.ts'
-import { computeProgression, eraOf, STAR_GLYPH, starRound, type EraFilter } from './progression.ts'
+import { computeProgression, eraOf, sliceWindow, STAR_GLYPH, starRound, type EraFilter } from './progression.ts'
 import { ProgressionChart } from './ProgressionChart.tsx'
 import { ForestGraph } from './ForestGraph.tsx'
 import type { DashboardData, DreamRsiTabState, createDreamRsiStore } from './store.ts'
@@ -314,15 +314,31 @@ function EventsTail({ data, t }: { data: DashboardData; t: PropsLocale<'dreamRsi
  * speed scores, sanity probes) are toggled in with a checkbox; including
  * them stretches the y-domain, so they are off by default. The frontier,
  * the markers, and the domain all recompute over the included set.
+ *
+ * Plotted range: from/to inputs (default = the FULL range) limit which
+ * iterations plot; the within-window frontier restarts at the window start
+ * and the markers recompute for the window only. A reset restores the full
+ * range.
  */
 function ProgressionSection({ data, t }: { data: DashboardData; t: PropsLocale<'dreamRsi'>['t'] }): ReactNode {
   const [includeLegacy, setIncludeLegacy] = useState(false)
+  const [window_, setWindow] = useState<{ from: number; to: number } | undefined>(undefined)
+  const total = data.attempts.length
   const eraFilter: EraFilter = includeLegacy ? 'all' : 'ratio'
+  // The window (default: the full range) slices BEFORE the era filter and the
+  // progression re-index — the within-window frontier restarts at its start.
+  const from = window_?.from ?? 0
+  const to = window_?.to ?? Math.max(total - 1, 0)
+  const windowed = useMemo(
+    () => sliceWindow(data.attempts, from, to),
+    [data.attempts, from, to],
+  )
   const progression = useMemo(
-    () => computeProgression(data.attempts, { eraFilter }),
-    [data.attempts, eraFilter],
+    () => computeProgression(windowed, { eraFilter }),
+    [windowed, eraFilter],
   )
   const hasRaw = data.attempts.some(point => point.era === 'raw')
+  const fullRange = window_ === undefined || (from === 0 && to >= total - 1)
   if (progression.points.length === 0 && !hasRaw) return null
   return (
     <div style={css.card} data-dream-rsi='progression-card'>
@@ -339,6 +355,47 @@ function ProgressionSection({ data, t }: { data: DashboardData; t: PropsLocale<'
             <span>{t('progress.includeLegacy')}</span>
           </label>
         )}
+        <span style={css.treeField}>
+          <span>{t('progress.range')}</span>
+          <input
+            type='number'
+            style={css.treeSelect}
+            min={0}
+            max={Math.max(total - 1, 0)}
+            value={from}
+            onChange={(event) => {
+              const value = Number.parseInt(event.target.value, 10)
+              setWindow({ from: Number.isNaN(value) ? 0 : value, to })
+            }}
+            disabled={total === 0}
+            data-dream-rsi='progression-range-from'
+            aria-label={t('progress.rangeFrom')}
+          />
+          <span>–</span>
+          <input
+            type='number'
+            style={css.treeSelect}
+            min={0}
+            max={Math.max(total - 1, 0)}
+            value={to}
+            onChange={(event) => {
+              const value = Number.parseInt(event.target.value, 10)
+              setWindow({ from, to: Number.isNaN(value) ? Math.max(total - 1, 0) : value })
+            }}
+            disabled={total === 0}
+            data-dream-rsi='progression-range-to'
+            aria-label={t('progress.rangeTo')}
+          />
+          <button
+            type='button'
+            style={css.refreshButton}
+            onClick={() => { setWindow(undefined) }}
+            disabled={fullRange}
+            data-dream-rsi='progression-range-reset'
+          >
+            {t('progress.rangeReset')}
+          </button>
+        </span>
         <span style={css.note}>{t('progress.erasNote')}</span>
       </div>
       {progression.points.length === 0
@@ -416,7 +473,7 @@ function TreeSection({
       )}
 
       {view !== 'all' && focused !== undefined && focused.nodes.length > 0 && (
-        <TreeGraph nodes={focused.nodes} roundId={focused.roundId} showBestPath={showBestPath} t={t} />
+        <TreeGraph nodes={focused.nodes} roundId={focused.roundId} showBestPath={showBestPath} era={focused.era} t={t} />
       )}
       {view !== 'all' && focused !== undefined && focused.nodes.length === 0 && (
         <div style={css.note} data-dream-rsi='tree-empty'>{t('tree.empty')}</div>

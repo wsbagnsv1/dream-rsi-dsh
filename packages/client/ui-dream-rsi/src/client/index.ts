@@ -25,11 +25,11 @@ export type { DashboardData, DreamRsiState, DreamRsiTabState, LoadStatus } from 
 export type { DreamRsiKey } from './locales.ts'
 export type { LayoutOptions, LayoutPosition, TreeLayout } from './tree-layout.ts'
 export { layoutTree, scoreColor } from './tree-layout.ts'
-export type { ForestBand, ForestLayout, ForestOptions, ForestRound } from './forest-layout.ts'
-export { layoutForest } from './forest-layout.ts'
+export type { ForestBand, ForestLayout, ForestOptions, ForestRound, ForestStar } from './forest-layout.ts'
+export { forestStar, layoutForest } from './forest-layout.ts'
 export type { Era, EraFilter, IterationPoint, PolicyMarker, Progression, RoundNodes } from './progression.ts'
 export {
-  computeProgression, eraOf, roundColor, starRound, thinIndices, toIterationNodes,
+  computeProgression, eraOf, roundColor, sliceWindow, starRound, thinIndices, toIterationNodes,
   SCORE_ERA_THRESHOLD, STAR_GLYPH, X_LABEL_CAP,
 } from './progression.ts'
 export type { ProgressionChartProps } from './ProgressionChart.tsx'

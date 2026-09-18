@@ -10,6 +10,7 @@
  */
 import { bestPath } from './read.ts'
 import type { NodeRow } from './read.ts'
+import type { Era } from './progression.ts'
 import { layoutTree } from './tree-layout.ts'
 import type { TreeLayout } from './tree-layout.ts'
 
@@ -19,6 +20,8 @@ export interface ForestRound {
   nodes: readonly NodeRow[]
   /** The nodes read hit the page cap before the file's end. */
   truncated: boolean
+  /** The round's objective era (undefined when unclassified). */
+  era?: Era | undefined
 }
 
 /** One round's band: its local layout shifted into the global canvas. */
@@ -118,4 +121,36 @@ export function layoutForest(rounds: readonly ForestRound[], options: ForestOpti
     width: Math.max(cursor - bandGap, 0),
     height: maxHeight === 0 ? 0 : maxHeight + offsetY,
   }
+}
+
+/** Where the ★ sits: the champion node of the forest (round + node id). */
+export interface ForestStar {
+  roundId: string
+  nodeId: string
+  /** The champion node's valid score (the max over ratio-band best-path terminals). */
+  score: number
+}
+
+/**
+ * The forest's star: the terminal node of the best path of the champion
+ * RATIO-era band — the same semantics as the rounds-table star (raw bands
+ * never star), ties keeping the first band chronologically.
+ * @param rounds - the forest rounds (any order).
+ * @returns the star position, or undefined when no ratio band has a scored best path.
+ */
+export function forestStar(rounds: readonly ForestRound[]): ForestStar | undefined {
+  const chronological = [...rounds].sort((left, right) => left.roundId < right.roundId ? -1 : left.roundId > right.roundId ? 1 : 0)
+  let star: ForestStar | undefined
+  for (const round of chronological) {
+    if (round.era !== 'ratio') continue
+    const path = bestPath(round.nodes)
+    const terminalId = path?.[path.length - 1]
+    if (path === undefined || terminalId === undefined) continue
+    const terminal = round.nodes.find(node => node.id === terminalId)
+    const score = typeof terminal?.score === 'number' && !Number.isNaN(terminal.score) ? terminal.score : 0
+    if (star === undefined || score > star.score) {
+      star = { roundId: round.roundId, nodeId: terminalId, score }
+    }
+  }
+  return star
 }

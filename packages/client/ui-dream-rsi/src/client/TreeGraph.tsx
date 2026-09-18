@@ -13,6 +13,7 @@ import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { bestPath, FLOORED_SCORE } from './read.ts'
 import type { NodeRow } from './read.ts'
 import { layoutTree, scoreColor } from './tree-layout.ts'
+import { STAR_GLYPH } from './progression.ts'
 import type {} from './locales.ts'
 
 /** The graph's props: one round's rows, its id, copy, and the toggle state. */
@@ -23,6 +24,11 @@ export interface TreeGraphProps {
   roundId: string
   /** Whether the best path is emphasized. */
   showBestPath: boolean
+  /**
+   * The round's objective era: only a ratio-era round stars its best-path
+   * terminal (the rounds-table semantics — raw probes never star).
+   */
+  era?: 'ratio' | 'raw' | undefined
   /** Namespace-bound translate. */
   t: TranslateNS<'dreamRsi'>
 }
@@ -68,13 +74,20 @@ function scoreText(score: number | undefined): string {
  * @param props - the rows, round id, toggle state, and copy.
  * @returns the SVG graph with its legend.
  */
-export function TreeGraph({ nodes, roundId, showBestPath, t }: TreeGraphProps): ReactNode {
+export function TreeGraph({ nodes, roundId, showBestPath, era, t }: TreeGraphProps): ReactNode {
   const layout = useMemo(() => layoutTree(nodes), [nodes])
-  const path = useMemo(() => (showBestPath ? bestPath(nodes) : undefined), [nodes, showBestPath])
-  const onPath = useMemo(() => new Set(path ?? []), [path])
+  // The best path (and its terminal's star) exists whenever the round has a
+  // scored chain — independent of the emphasis toggle.
+  const path = useMemo(() => bestPath(nodes), [nodes])
+  const emphasized = showBestPath ? path : undefined
+  const onPath = useMemo(() => new Set(emphasized ?? []), [emphasized])
   const pathEdges = useMemo(() => new Set(
-    path === undefined ? [] : path.slice(1).map((id, index) => `${String(path[index])}->${id}`),
-  ), [path])
+    emphasized === undefined ? [] : emphasized.slice(1).map((id, index) => `${String(emphasized[index])}->${id}`),
+  ), [emphasized])
+  const starNode = useMemo(() => {
+    if (era !== 'ratio' || path === undefined || path.length === 0) return undefined
+    return path[path.length - 1]
+  }, [era, path])
   const byId = useMemo(() => new Map(nodes.map(node => [node.id, node])), [nodes])
 
   // Score domain over evaluated nodes; min === max renders the single score full green.
@@ -122,7 +135,7 @@ export function TreeGraph({ nodes, roundId, showBestPath, t }: TreeGraphProps): 
                 stroke={best ? BEST_PATH_COLOR : EDGE_COLOR}
                 strokeWidth={best ? 2.5 : 1}
                 strokeLinecap='round'
-                opacity={best === false && path !== undefined ? 0.55 : 1}
+                opacity={best === false && emphasized !== undefined ? 0.55 : 1}
               />
             )
           })}
@@ -151,6 +164,22 @@ export function TreeGraph({ nodes, roundId, showBestPath, t }: TreeGraphProps): 
               </circle>
             )
           })}
+          {/* the round's champion node ★ (ratio-era rounds only) */}
+          {starNode !== undefined && (() => {
+            const position = layout.positions.get(starNode)
+            if (position === undefined) return null
+            return (
+              <text
+                x={position.x} y={position.y - 10}
+                textAnchor='middle' fontSize={12} fill={BEST_PATH_COLOR}
+                data-dream-rsi-tree-star=''
+                data-dream-rsi-node={starNode}
+              >
+                {STAR_GLYPH}
+                <title>{t('forest.star', { round: roundId, node: starNode })}</title>
+              </text>
+            )
+          })()}
         </svg>
       </div>
       <div style={css.legend}>

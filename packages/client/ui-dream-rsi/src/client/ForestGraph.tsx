@@ -14,9 +14,10 @@ import type { ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { FLOORED_SCORE } from './read.ts'
 import type { NodeRow } from './read.ts'
-import { layoutForest } from './forest-layout.ts'
+import { layoutForest, forestStar } from './forest-layout.ts'
 import type { ForestRound } from './forest-layout.ts'
 import { scoreColor } from './tree-layout.ts'
+import { STAR_GLYPH } from './progression.ts'
 import type {} from './locales.ts'
 
 /** The forest's props: every round's nodes and the copy. */
@@ -61,6 +62,7 @@ function scoreText(score: number | undefined, floored: boolean): string {
  */
 export function ForestGraph({ rounds, t }: ForestGraphProps): ReactNode {
   const layout = useMemo(() => layoutForest(rounds, { bandGap: BAND_GAP, offsetY: OFFSET_Y }), [rounds])
+  const star = useMemo(() => forestStar(rounds), [rounds])
   const byKey = useMemo(() => {
     const map = new Map<string, NodeRow>()
     for (const round of rounds) {
@@ -167,6 +169,23 @@ export function ForestGraph({ rounds, t }: ForestGraphProps): ReactNode {
               </circle>
             )
           }))}
+          {/* the champion node's ★: where the best path of the best ratio band ends */}
+          {star !== undefined && (() => {
+            const position = layout.positions.get(`${star.roundId}/${star.nodeId}`)
+            if (position === undefined) return null
+            return (
+              <text
+                x={position.x} y={position.y - 9}
+                textAnchor='middle' fontSize={11} fill={BEST_PATH_COLOR}
+                data-dream-rsi-forest-star=''
+                data-dream-rsi-round={star.roundId}
+                data-dream-rsi-node={star.nodeId}
+              >
+                {STAR_GLYPH}
+                <title>{t('forest.star', { round: star.roundId, node: star.nodeId })}</title>
+              </text>
+            )
+          })()}
         </svg>
       </div>
       <div style={css.legend}>

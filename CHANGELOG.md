@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.4 — graph star + plotted-range window
+
+- **★ on the graphs**: the best-path highlight's terminal node — the
+  champion node — carries a ★ glyph in both the global forest (the terminal
+  of the champion ratio-era band's best path, via `forestStar`; raw bands
+  never star) and the focused per-round tree (ratio-era rounds only). The
+  existing best-path edge emphasis stays; the star marks WHERE it ends.
+- **Plotted-range option** on the iteration chart: from/to number inputs
+  (default = the FULL range) + a reset control. Within a window the
+  subpoints, the Pareto frontier (running max over the WINDOW's valid
+  attempts — restarting at the window start), and the policy markers all
+  recompute for the window only (pure `sliceWindow`, normalized/clamped;
+  fully-out-of-range windows clamp to the nearest data edge so the chart
+  stays non-empty). Composes with the era filter.
+- Tests: +12 (forest star fixtures incl. ties/raw-exclusion, the tree star's
+  era gate, window slicing/normalization/clamping, within-window Pareto +
+  markers, era composition). Package suite: 101.
+
 ## 0.4.3 — best-result star + ratio-era champion headline
 
 - **★ marker**: the rounds table stars the best valid ratio-scale round

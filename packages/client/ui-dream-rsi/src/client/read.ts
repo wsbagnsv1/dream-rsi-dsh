@@ -233,6 +233,135 @@ export function parseStoreConfig(text: string): StoreConfig | undefined {
   }
 }
 
+// -- discovery-tree nodes (trees/<roundId>/nodes.jsonl) ----------------------
+
+/** One discovery-tree node's graph row (a narrowed NodeRecord). */
+export interface NodeRow {
+  id: string
+  roundId?: string | undefined
+  parentId?: string | null | undefined
+  kind?: string | undefined
+  mechanism?: string | undefined
+  summary?: string | undefined
+  score?: number | undefined
+  valid?: boolean | undefined
+  evaluated?: boolean | undefined
+  failClass?: string | undefined
+  notes?: string | undefined
+  depth?: number | undefined
+  policyVersion?: string | undefined
+  createdAt?: string | undefined
+}
+
+/**
+ * Parse a page of `trees/<roundId>/nodes.jsonl` (JSON Lines).
+ * @param text - the page's text, lines joined by \n.
+ * @returns the parsed rows; malformed lines are skipped.
+ */
+export function parseNodesPage(text: string): NodeRow[] {
+  const rows: NodeRow[] = []
+  for (const line of text.split('\n')) {
+    if (line.trim() === '') continue
+    const value = tryJson(line)
+    if (typeof value !== 'object' || value === null) continue
+    const raw = value as Record<string, unknown>
+    const action = typeof raw.action === 'object' && raw.action !== null
+      ? raw.action as Record<string, unknown>
+      : {}
+    const outcome = typeof raw.outcome === 'object' && raw.outcome !== null
+      ? raw.outcome as Record<string, unknown>
+      : {}
+    const state = typeof raw.state === 'object' && raw.state !== null
+      ? raw.state as Record<string, unknown>
+      : {}
+    const lineage = typeof raw.lineage === 'object' && raw.lineage !== null
+      ? raw.lineage as Record<string, unknown>
+      : {}
+    const id = typeof raw.id === 'string' ? raw.id : undefined
+    if (id === undefined) continue
+    rows.push({
+      id,
+      roundId: typeof raw.roundId === 'string' ? raw.roundId : undefined,
+      parentId: typeof raw.parentId === 'string'
+        ? raw.parentId
+        : raw.parentId === null ? null : undefined,
+      kind: typeof raw.kind === 'string' ? raw.kind : undefined,
+      mechanism: typeof action.mechanism === 'string' ? action.mechanism : undefined,
+      summary: typeof action.summary === 'string' ? action.summary : undefined,
+      score: typeof outcome.score === 'number' ? outcome.score : undefined,
+      valid: typeof outcome.valid === 'boolean' ? outcome.valid : undefined,
+      evaluated: typeof outcome.evaluated === 'boolean' ? outcome.evaluated : undefined,
+      failClass: typeof outcome.failClass === 'string' ? outcome.failClass : undefined,
+      notes: typeof raw.notes === 'string' ? raw.notes : undefined,
+      depth: typeof state.depth === 'number' ? state.depth : undefined,
+      policyVersion: typeof lineage.policyVersion === 'string' ? lineage.policyVersion : undefined,
+      createdAt: typeof lineage.createdAt === 'string' ? lineage.createdAt : undefined,
+    })
+  }
+  return rows
+}
+
+/** Children index of one round's node set: parent id → child ids in file order. */
+export interface TreeIndex {
+  children: Map<string, string[]>
+  /** Node ids with no parent (the roots of the visible forest). */
+  roots: string[]
+}
+
+/**
+ * Index one round's nodes for traversal and layout.
+ * @param nodes - the parsed node rows.
+ * @returns the children index and the root ids (file order preserved).
+ */
+export function buildTreeIndex(nodes: readonly NodeRow[]): TreeIndex {
+  const children = new Map<string, string[]>()
+  const ids = new Set(nodes.map(node => node.id))
+  const roots: string[] = []
+  for (const node of nodes) {
+    // A parent that is itself absent from the file (a truncated page) cannot
+    // be drawn as a parent; such a node counts as a root of the visible forest.
+    if (node.parentId == null || !ids.has(node.parentId)) {
+      roots.push(node.id)
+      continue
+    }
+    const list = children.get(node.parentId)
+    if (list === undefined) children.set(node.parentId, [node.id])
+    else list.push(node.id)
+  }
+  return { children, roots }
+}
+
+/**
+ * The best path: the root→leaf path with the highest SUM of node scores (a
+ * chain's compound result), ties broken by the first leaf in file order.
+ * Unevaluated nodes contribute 0.
+ * @param nodes - the parsed node rows of one round.
+ * @returns the path as node ids from root to leaf, or undefined when no node
+ *   carries a score at all (nothing to be best at).
+ */
+export function bestPath(nodes: readonly NodeRow[]): string[] | undefined {
+  if (!nodes.some(node => typeof node.score === 'number' && !Number.isNaN(node.score))) {
+    return undefined
+  }
+  const { children, roots } = buildTreeIndex(nodes)
+  const scores = new Map(nodes.map(node => [node.id, typeof node.score === 'number' && !Number.isNaN(node.score) ? node.score : 0]))
+  let best: { path: string[]; total: number } | undefined
+  /** Depth-first over the indexed forest; file order = tie order. */
+  const walk = (id: string, path: string[], total: number): void => {
+    const kids = children.get(id)
+    const nextPath = [...path, id]
+    const nextTotal = total + (scores.get(id) ?? 0)
+    if (kids === undefined) {
+      if (best === undefined || nextTotal > best.total) best = { path: nextPath, total: nextTotal }
+      return
+    }
+    for (const kid of kids) walk(kid, nextPath, nextTotal)
+  }
+  for (const root of roots) walk(root, [], 0)
+  if (best === undefined) return undefined
+  return best.path
+}
+
 // -- derivation --------------------------------------------------------------
 
 /** The champion the hero card shows. */

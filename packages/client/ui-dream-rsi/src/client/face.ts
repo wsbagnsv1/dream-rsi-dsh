@@ -21,10 +21,10 @@ import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { WorkspaceFileText } from '@deepseek-ai/dsh-api-workspace-files/types'
 import {
-  parseDreamReport, parseEventsPage, parsePolicyIndex, parseRoundRecord, parseStoreConfig,
-  STORE_DIR,
+  parseDreamReport, parseEventsPage, parseNodesPage, parsePolicyIndex, parseRoundRecord,
+  parseStoreConfig, STORE_DIR,
 } from './read.ts'
-import type { DreamRow, EventRow, PolicyRow, RoundRow } from './read.ts'
+import type { DreamRow, EventRow, NodeRow, PolicyRow, RoundRow } from './read.ts'
 import type { DashboardData, createDreamRsiStore } from './store.ts'
 
 /** How many recent rounds the panel reads (older ones are cut). */
@@ -33,6 +33,10 @@ export const ROUND_CAP = 12
 export const DREAM_CAP = 8
 /** How many leading event lines the panel reads. */
 export const EVENT_PAGE_LINES = 120
+/** Lines per nodes.jsonl page. */
+export const NODES_PAGE_LINES = 2000
+/** Page cap for one round's nodes read (≈10k nodes). */
+export const NODES_PAGE_CAP = 5
 
 /** The slice of the Client Remote this package calls. */
 export type WorkspaceFilesRemote = Pick<ClientRemote, 'workspaceFiles'>
@@ -103,14 +107,16 @@ export function dreamRsiFace(
   return (sessionId: SessionId, actions: FaceActions): DreamRsiInjected => {
     /** Per tab: the refresh generation; the latest request wins. */
     const generations = new Map<string, number>()
-    const nextGeneration = (tabId: string): number => {
-      const generation = (generations.get(tabId) ?? 0) + 1
-      generations.set(tabId, generation)
+    /** Per tab: the tree-read generation, independent of the dashboard's. */
+    const treeGenerations = new Map<string, number>()
+    const nextGeneration = (map: Map<string, number>, tabId: string): number => {
+      const generation = (map.get(tabId) ?? 0) + 1
+      map.set(tabId, generation)
       return generation
     }
     const refresh = (tabId: string, signal: AbortSignal): void => {
       if (signal.aborted) return
-      const generation = nextGeneration(tabId)
+      const generation = nextGeneration(generations, tabId)
       actions.started(tabId)
       void load(remote, sessionId, signal).then((outcome) => {
         if (generations.get(tabId) !== generation) return
@@ -119,10 +125,22 @@ export function dreamRsiFace(
         else actions.failed(tabId, outcome.message)
       })
     }
+    const selectRound = (tabId: string, roundId: string, signal: AbortSignal): void => {
+      if (signal.aborted) return
+      const generation = nextGeneration(treeGenerations, tabId)
+      actions.treeLoading(tabId, roundId)
+      void loadNodes(remote, sessionId, roundId, signal).then((outcome) => {
+        if (treeGenerations.get(tabId) !== generation) return
+        if (outcome.kind === 'loaded') actions.treeLoaded(tabId, roundId, outcome.nodes, outcome.truncated)
+        else actions.treeFailed(tabId, outcome.message)
+      })
+    }
     return {
       refresh,
+      selectRound,
       forget: (tabId: string) => {
         generations.delete(tabId)
+        treeGenerations.delete(tabId)
         actions.forget(tabId)
       },
     }
@@ -138,6 +156,13 @@ export interface DreamRsiInjected {
    */
   readonly refresh: (tabId: string, signal: AbortSignal) => void
   /**
+   * Read one round's discovery tree into the graph view.
+   * @param tabId - the tab being drawn.
+   * @param roundId - the round whose nodes to read.
+   * @param signal - the tab record's lifetime.
+   */
+  readonly selectRound: (tabId: string, roundId: string, signal: AbortSignal) => void
+  /**
    * Drop one tab's state, for a tab record that is gone.
    * @param tabId - the tab that went away.
    */
@@ -148,6 +173,11 @@ export interface DreamRsiInjected {
 export type LoadOutcome =
   | { kind: 'loaded'; data: DashboardData }
   | { kind: 'missing' }
+  | { kind: 'failed'; message: string }
+
+/** The outcome of one round's nodes read. */
+export type NodesOutcome =
+  | { kind: 'loaded'; nodes: NodeRow[]; truncated: boolean }
   | { kind: 'failed'; message: string }
 
 /**
@@ -245,4 +275,38 @@ async function listDreamRows(
 /** Newest-first order for zero-padded ids (r0010 sorts before r0009). */
 function descending(left: string, right: string): number {
   return left < right ? 1 : left > right ? -1 : 0
+}
+
+/**
+ * Read one round's `nodes.jsonl`, page by page, up to the page cap.
+ *
+ * The first page covers every sane round (the live store's biggest tree is
+ * well under one page); a larger tree keeps paging until eof or the cap, and
+ * the truncation flag travels with the rows so the graph can say so.
+ */
+export async function loadNodes(
+  remote: WorkspaceFilesRemote,
+  sessionId: SessionId,
+  roundId: string,
+  signal: AbortSignal,
+): Promise<NodesOutcome> {
+  const path = `${STORE_DIR}/trees/${roundId}/nodes.jsonl`
+  const lines: string[] = []
+  let truncated = false
+  for (let page = 0; page < NODES_PAGE_CAP; page += 1) {
+    const offset = page * NODES_PAGE_LINES + 1
+    const result = await remote.workspaceFiles.read(sessionId, path, { offset, limit: NODES_PAGE_LINES }, signal)
+    if (!result.ok) {
+      if (page === 0 && result.error.code === 'workspace-file/not-found') {
+        // A directory without nodes.jsonl is an empty tree, not an error.
+        return { kind: 'loaded', nodes: [], truncated: false }
+      }
+      return { kind: 'failed', message: result.error.message }
+    }
+    const { text, eof } = result.value
+    lines.push(text)
+    if (eof) return { kind: 'loaded', nodes: parseNodesPage(lines.join('\n')), truncated: false }
+  }
+  truncated = true
+  return { kind: 'loaded', nodes: parseNodesPage(lines.join('\n')), truncated }
 }

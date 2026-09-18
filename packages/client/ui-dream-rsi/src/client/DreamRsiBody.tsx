@@ -8,7 +8,7 @@
  * bundle is built standalone (outside the harness's CSS pipeline), and the
  * panel is small enough to style without a compiler.
  */
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { IconRefreshOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
@@ -16,6 +16,7 @@ import { deriveChampion, FLOORED_SCORE, totalNodes } from './read.ts'
 import type { DreamRow, PolicyRow, RoundRow } from './read.ts'
 import type { DashboardData, DreamRsiTabState, createDreamRsiStore } from './store.ts'
 import type { DreamRsiInjected } from './face.ts'
+import { TreeGraph } from './TreeGraph.tsx'
 import type {} from './locales.ts'
 
 /** The body's composed props: the tab it draws, its store, its face, its copy. */
@@ -112,6 +113,12 @@ const css = {
   eventLine: { display: 'flex', gap: 8, padding: '1px 0' } satisfies React.CSSProperties,
   eventCall: { fontFamily: 'ui-monospace, monospace', fontSize: 11 } satisfies React.CSSProperties,
   eventTime: { color: 'var(--dsh-fg-muted, #888)', marginLeft: 'auto', flexShrink: 0 } satisfies React.CSSProperties,
+  treeToolbar: { display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 } satisfies React.CSSProperties,
+  treeField: { display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12 } satisfies React.CSSProperties,
+  treeSelect: {
+    fontSize: 12, padding: '2px 6px', borderRadius: 6,
+    border: '1px solid var(--dsh-border, #ccc)', background: 'transparent', color: 'inherit',
+  } satisfies React.CSSProperties,
 }
 
 /** The champion card: the campaign's best result and where the program stands. */
@@ -249,12 +256,85 @@ function EventsTail({ data, t }: { data: DashboardData; t: PropsLocale<'dreamRsi
 }
 
 /**
+ * The discovery-tree section: round selector, best-path toggle, and the SVG
+ * graph of the selected round's nodes. The tree slice loads on demand — the
+ * first load picks the latest round in the dashboard's data.
+ */
+function TreeSection({
+  tabId, signal, state, selectRound, t,
+}: {
+  tabId: string
+  signal: AbortSignal
+  state: DreamRsiTabState
+  selectRound: DreamRsiInjected['selectRound']
+  t: PropsLocale<'dreamRsi'>['t']
+}): ReactNode {
+  const [showBestPath, setShowBestPath] = useState(true)
+  const { data, tree } = state
+  const roundOptions = data?.rounds ?? []
+  const selected = tree.roundId
+
+  return (
+    <div style={css.card} data-dream-rsi='tree'>
+      <div style={css.cardTitle}>{t('tree.title')}</div>
+      <div style={css.treeToolbar}>
+        <label style={css.treeField}>
+          <span>{t('tree.select')}</span>
+          <select
+            style={css.treeSelect}
+            value={selected ?? ''}
+            onChange={(event) => {
+              const roundId = event.target.value
+              if (roundId !== '') selectRound(tabId, roundId, signal)
+            }}
+            disabled={roundOptions.length === 0}
+            data-dream-rsi='tree-round'
+          >
+            {selected !== undefined && !roundOptions.some(round => round.roundId === selected) && (
+              <option value={selected}>{selected}</option>
+            )}
+            {roundOptions.map(round => (
+              <option key={round.roundId} value={round.roundId}>{round.roundId}</option>
+            ))}
+          </select>
+        </label>
+        <label style={css.treeField}>
+          <input
+            type='checkbox'
+            checked={showBestPath}
+            onChange={(event) => { setShowBestPath(event.target.checked) }}
+            data-dream-rsi='tree-best-toggle'
+          />
+          <span>{t('tree.showBestPath')}</span>
+        </label>
+      </div>
+
+      {tree.status === 'failed' && (
+        <div style={css.note} data-dream-rsi='tree-failure'>{tree.failure ?? ''}</div>
+      )}
+      {(tree.status === 'loading' || tree.status === 'idle') && tree.nodes.length === 0 && (
+        <div style={css.note} data-dream-rsi='tree-loading'>{t('tree.loading')}</div>
+      )}
+      {tree.status === 'ready' && tree.nodes.length === 0 && (
+        <div style={css.note} data-dream-rsi='tree-empty'>{t('tree.empty')}</div>
+      )}
+      {tree.nodes.length > 0 && tree.roundId !== undefined && (
+        <>
+          <TreeGraph nodes={tree.nodes} roundId={tree.roundId} showBestPath={showBestPath} t={t} />
+          {tree.truncated && <div style={css.note}>{t('tree.truncated', { count: tree.nodes.length })}</div>}
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
  * The panel body: the dashboard for one tab.
  * @param props - the tab, store, face, and copy.
  * @returns the rendered dashboard.
  */
 export function DreamRsiBody({
-  useTabInfo, useStore, refresh, forget, t,
+  useTabInfo, useStore, refresh, selectRound, forget, t,
 }: DreamRsiBodyProps): ReactNode {
   const { tab } = useTabInfo()
   const { signal } = tab
@@ -271,6 +351,16 @@ export function DreamRsiBody({
     if (signal.aborted) return
     refresh(tab.id, signal)
   }, [signal, tab.id, tab.navigation.revision, refresh])
+
+  // The graph view's first load: once the dashboard names rounds and no tree
+  // was chosen yet, read the latest round's nodes.
+  const dataReady = state?.data !== undefined && (state.data.rounds.length > 0)
+  const treeIdle = state !== undefined && state.tree.status === 'idle' && state.tree.roundId === undefined
+  useEffect(() => {
+    if (signal.aborted || !dataReady || !treeIdle || state === undefined) return
+    const latest = state.data?.rounds[0]?.roundId
+    if (latest !== undefined) selectRound(tab.id, latest, signal)
+  }, [signal, dataReady, treeIdle, state, selectRound, tab.id])
 
   const failureShown = state !== undefined && (state.status === 'failed' || state.failure !== undefined)
   const data = state?.data
@@ -321,6 +411,10 @@ export function DreamRsiBody({
       {data !== undefined && (
         <>
           <ChampionCard data={data} t={t} />
+
+          {state !== undefined && (
+            <TreeSection tabId={tab.id} signal={signal} state={state} selectRound={selectRound} t={t} />
+          )}
 
           <div style={css.card} data-dream-rsi='lineage'>
             <div style={css.cardTitle}>{t('lineage.title')}</div>

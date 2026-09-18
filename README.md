@@ -113,6 +113,7 @@ Background delegation is recommended for long campaigns.
 A client plugin (`packages/client/ui-dream-rsi/`) adds a **Dream-RSI campaign dashboard** to the DSH right Sidebar — the same class of surface as the workspace file tree and the document preview. It reads the session workspace's `.dreamrsi/` store **read-only** through the workspace-files pipe and renders:
 
 - **Champion card** — best score across rounds (and the round + policy that produced it), the active policy version/name/kind, round/node/dream totals;
+- **Discovery tree** — an inline SVG graph of a selected round's `nodes.jsonl`: nodes colored by a score gradient (red → green), edges parent→child, native-SVG hover tooltips (id, mechanism, score, valid/failClass, notes excerpt), a deterministic tidy-tree layout (depth → x, leaves → rows; zero dependencies), a round selector (default: latest), and a toggleable **best-path highlight** (the root→leaf chain with the highest summed score);
 - **Policy lineage** — the full `v0001 → vNNNN` timeline with statuses, kinds, and derivation;
 - **Rounds table** — per-round status, policy, nodes, attempts, best score (latest 12);
 - **Dream reports** — selected candidate, mean replay score, valid-world counts, floored/invalid diagnostics (latest 8);

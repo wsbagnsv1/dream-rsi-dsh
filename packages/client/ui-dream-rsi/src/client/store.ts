@@ -7,7 +7,7 @@
  * id because two tabs of this kind in one session refresh independently.
  */
 import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
-import type { DreamRow, EventRow, PolicyRow, RoundRow, StoreConfig } from './read.ts'
+import type { DreamRow, EventRow, NodeRow, PolicyRow, RoundRow, StoreConfig } from './read.ts'
 
 /** Everything the panel draws, derived from the store files at refresh time. */
 export interface DashboardData {
@@ -39,6 +39,27 @@ export type LoadStatus =
   | /** the workspace has no `.dreamrsi/` directory */ 'missing'
   | /** a read failed and no previous data is shown */ 'failed'
 
+/** What one tab's graph view is doing right now. */
+export type TreeStatus = 'idle' | 'loading' | 'ready' | 'failed'
+
+/** One round's loaded discovery tree (the graph view's data). */
+export interface TreeSlice {
+  /** The round whose nodes are loaded (undefined before the first load). */
+  roundId: string | undefined
+  status: TreeStatus
+  /** The parsed node rows, in file order (truncated to the read cap). */
+  nodes: NodeRow[]
+  /** The nodes read hit the page cap before the file's end. */
+  truncated: boolean
+  /** Why the last tree read failed (when `status` is `failed`). */
+  failure: string | undefined
+}
+
+/** The idle tree slice a fresh bucket starts with. */
+function idleTree(): TreeSlice {
+  return { roundId: undefined, status: 'idle', nodes: [], truncated: false, failure: undefined }
+}
+
 /** One tab's panel state. */
 export interface DreamRsiTabState {
   status: LoadStatus
@@ -48,6 +69,8 @@ export interface DreamRsiTabState {
   loadedAt: number | undefined
   /** Why the last refresh failed (when `status` is `failed` or stale). */
   failure: string | undefined
+  /** The graph view's slice: one selected round's discovery tree. */
+  tree: TreeSlice
 }
 
 /** Every tab's panel, keyed by tab id. */
@@ -73,6 +96,9 @@ type DreamRsiActions = {
   loaded: (draft: DreamRsiState, tabId: string, data: DashboardData, loadedAt: number) => void
   missing: (draft: DreamRsiState, tabId: string) => void
   failed: (draft: DreamRsiState, tabId: string, failure: string) => void
+  treeLoading: (draft: DreamRsiState, tabId: string, roundId: string) => void
+  treeLoaded: (draft: DreamRsiState, tabId: string, roundId: string, nodes: NodeRow[], truncated: boolean) => void
+  treeFailed: (draft: DreamRsiState, tabId: string, failure: string) => void
   forget: (draft: DreamRsiState, tabId: string) => void
 }
 
@@ -95,7 +121,7 @@ export function createDreamRsiStore(): EngineStoreHandle<DreamRsiState, DreamRsi
       started: (d, tabId: string) => {
         const tab = d.byTab[tabId]
         if (tab === undefined) {
-          d.byTab[tabId] = { status: 'loading', data: undefined, loadedAt: undefined, failure: undefined }
+          d.byTab[tabId] = { status: 'loading', data: undefined, loadedAt: undefined, failure: undefined, tree: idleTree() }
           return
         }
         tab.status = 'loading'
@@ -109,10 +135,11 @@ export function createDreamRsiStore(): EngineStoreHandle<DreamRsiState, DreamRsi
        * @param loadedAt - wall-clock read of the refresh.
        */
       loaded: (d, tabId: string, data: DashboardData, loadedAt: number) => {
-        bucket(d, tabId).status = 'ready'
-        bucket(d, tabId).data = data
-        bucket(d, tabId).loadedAt = loadedAt
-        bucket(d, tabId).failure = undefined
+        const tab = bucket(d, tabId)
+        tab.status = 'ready'
+        tab.data = data
+        tab.loadedAt = loadedAt
+        tab.failure = undefined
       },
       /**
        * Record that this workspace has no `.dreamrsi/` directory.
@@ -120,10 +147,12 @@ export function createDreamRsiStore(): EngineStoreHandle<DreamRsiState, DreamRsi
        * @param tabId - the tab being written.
        */
       missing: (d, tabId: string) => {
-        bucket(d, tabId).status = 'missing'
-        bucket(d, tabId).data = undefined
-        bucket(d, tabId).loadedAt = undefined
-        bucket(d, tabId).failure = undefined
+        const tab = bucket(d, tabId)
+        tab.status = 'missing'
+        tab.data = undefined
+        tab.loadedAt = undefined
+        tab.failure = undefined
+        tab.tree = idleTree()
       },
       /**
        * Record why one refresh failed.
@@ -135,6 +164,45 @@ export function createDreamRsiStore(): EngineStoreHandle<DreamRsiState, DreamRsi
         const tab = bucket(d, tabId)
         tab.status = 'failed'
         tab.failure = failure
+      },
+      /**
+       * Mark one round's tree read as running, keeping prior nodes on show.
+       * @param d - draft state.
+       * @param tabId - the tab being written.
+       * @param roundId - the round being read.
+       */
+      treeLoading: (d, tabId: string, roundId: string) => {
+        const tree = bucket(d, tabId).tree
+        tree.roundId = roundId
+        tree.status = 'loading'
+        tree.failure = undefined
+      },
+      /**
+       * Record one successful tree read.
+       * @param d - draft state.
+       * @param tabId - the tab being written.
+       * @param roundId - the round that was read.
+       * @param nodes - the parsed rows, in file order.
+       * @param truncated - whether the read cap cut the file.
+       */
+      treeLoaded: (d, tabId: string, roundId: string, nodes: NodeRow[], truncated: boolean) => {
+        const tree = bucket(d, tabId).tree
+        tree.roundId = roundId
+        tree.status = 'ready'
+        tree.nodes = nodes
+        tree.truncated = truncated
+        tree.failure = undefined
+      },
+      /**
+       * Record why one tree read failed.
+       * @param d - draft state.
+       * @param tabId - the tab being written.
+       * @param failure - the failure line to show.
+       */
+      treeFailed: (d, tabId: string, failure: string) => {
+        const tree = bucket(d, tabId).tree
+        tree.status = 'failed'
+        tree.failure = failure
       },
       /**
        * Forget one tab's state, for a tab record that is gone.

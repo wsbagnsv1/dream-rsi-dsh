@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.1 — discovery-tree graph view
+
+- **Graph view in the sidebar panel**: one selected round's discovery tree
+  (`trees/<roundId>/nodes.jsonl`) as inline SVG — deterministic tidy-tree
+  layout (depth → x, leaves → sequential rows; zero dependencies), nodes
+  colored by an HSL score gradient with native-SVG hover tooltips (mechanism,
+  score, valid/failClass, notes excerpt), a round selector (default latest),
+  and a toggleable best-path highlight (root→leaf chain with the highest
+  summed score; unscored trees show none).
+- Nodes load on demand for the selected round (paged read, ≈10k-node cap,
+  truncation surfaced); the dashboard refresh keeps the selected tree.
+- Tests: nodes parser (live-store shapes), layout determinism + no-overlap
+  invariants + cycle guard, best-path fixture semantics. Package suite: 33.
+
 ## 0.3.0 — web UI campaign dashboard
 
 - **Dream-RSI sidebar panel** (`packages/client/ui-dream-rsi/`, new client

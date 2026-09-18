@@ -18,12 +18,16 @@ import { createDreamRsiStore } from './store.ts'
 
 export type { DREAM_RSI_ID, DREAM_RSI_KIND, GUIDE_ORDER } from './definition.ts'
 export type { DreamRsiBodyProps } from './DreamRsiBody.tsx'
-export type { DreamRsiInjected, LoadOutcome } from './face.ts'
-export type { DashboardData, DreamRsiState, DreamRsiTabState, LoadStatus } from './store.ts'
+export type { TreeGraphProps } from './TreeGraph.tsx'
+export type { DreamRsiInjected, LoadOutcome, NodesOutcome } from './face.ts'
+export type { DashboardData, DreamRsiState, DreamRsiTabState, LoadStatus, TreeSlice, TreeStatus } from './store.ts'
 export type { DreamRsiKey } from './locales.ts'
+export type { LayoutOptions, LayoutPosition, TreeLayout } from './tree-layout.ts'
+export { layoutTree, scoreColor } from './tree-layout.ts'
 export type {
-  Champion, DreamRow, EventRow, PolicyIndex, PolicyRow, RoundRow, StoreConfig,
+  Champion, DreamRow, EventRow, NodeRow, PolicyIndex, PolicyRow, RoundRow, StoreConfig, TreeIndex,
 } from './read.ts'
+export { bestPath, buildTreeIndex, parseNodesPage } from './read.ts'
 
 /** This package's copy namespace. */
 const NS = 'dreamRsi'

@@ -98,6 +98,7 @@ export const zh = {
   'worlds': '{count} / {total}',
   'truncatedRounds': '部分轮次未列出（目录列表被截断，已读 {count} 个）。',
   'truncatedDreams': '只显示最近 {count} 份报告。',
+  'dreams.readFailed': '{file}：读取失败 — {reason}',
 } satisfies Record<string, string>
 
 /** Dream-RSI dashboard dictionary key union. */
@@ -187,4 +188,5 @@ export const en = {
   'worlds': '{count} / {total}',
   'truncatedRounds': 'Some rounds are not listed (directory listing truncated; {count} read).',
   'truncatedDreams': 'Showing the latest {count} reports.',
+  'dreams.readFailed': '{file}: read failed — {reason}',
 } satisfies Record<DreamRsiKey, string>

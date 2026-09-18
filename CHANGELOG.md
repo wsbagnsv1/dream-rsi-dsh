@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.7 — dream reports read whole (paged reads past the line window)
+
+- **User report fix**: the panel showed "Dreams: 0" while dreams/ held 37
+  valid reports. DIAGNOSED: the workspace file read is bounded by a LINE
+  WINDOW (host caps: 5000 lines / 2 MiB per page) — the 180–205KB
+  pretty-printed reports (~4–5k lines) exceeded the reader's single
+  2000-line window and came back TRUNCATED (`eof: false`, not an error), so
+  the JSON parse failed and every dream was silently skipped.
+- FIX: the dreams reader now pages until `eof` and JOINS the pages before
+  parsing (the same discipline the nodes reader had); the shared
+  `readTextPaged` serves both. A report that still fails (read error, or
+  page-cap truncation) is SURFACED as a per-file failure in the dreams list
+  — never silently dropped.
+- Tests: +3 (a ~17k-line multi-page dream parses fully with the whole
+  ranking; a read failure surfaces per-file; a page-cap-truncated report
+  surfaces as malformed). Package suite: 106.
+
 ## 0.4.6 — the Pareto frontier terminates at the champion
 
 - **User correction (mathematically right)**: the frontier line no longer

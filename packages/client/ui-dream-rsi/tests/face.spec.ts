@@ -124,3 +124,111 @@ describe('load() with a many-round store (no cap)', () => {
     expect(outcome.data.rounds[0]?.bestScore).toBeCloseTo(ROUND_COUNT * 0.1, 5)
   })
 })
+
+describe('load() dream reports — paged reads past the line window (W11)', () => {
+  const sessionId = 'session-1' as import('@deepseek-ai/dsh-session/types').SessionId
+
+  /** A dream report PRETTY-PRINTED past one 2000-line page (~4-5k lines, like the live store's). */
+  function bigDreamFile(runId: string, rankingEntries: number): string {
+    const report = {
+      runId,
+      createdAt: '2026-09-18T00:47:53.512Z',
+      selectedCandidate: 0,
+      selectedName: `deep-marker-${runId}`,
+      selectedKind: 'code',
+      selectedVersion: 'v0015',
+      ranking: [
+        {
+          candidate: 0,
+          name: `deep-marker-${runId}`,
+          kind: 'code',
+          version: 'v0015',
+          meanScore: 41.2,
+          perWorld: Array.from({ length: rankingEntries }, (_, index) => ({
+            worldId: `r${String(index + 1).padStart(4, '0')}`,
+            score: 40 + index * 0.01,
+            rounds: 6,
+            reveals: 12,
+            stopReason: 'exhausted',
+            terms: { quality: 40, cost: 0.1, parallelism: 1 },
+            estOutcomeFraction: 0,
+            batchSizes: [1, 2, 3],
+            trajectory: { worldId: `r${String(index + 1).padStart(4, '0')}`, steps: [{ decisionRound: 1, batch: ['n000'], reveal: 4 }], truncated: false, totalSteps: 1 },
+          })),
+        },
+      ],
+      guards: { noRegression: true, incumbentScore: 3.5 },
+      historySize: 6,
+      validWorlds: rankingEntries,
+      normalization: { min: 0, max: 41.2, enabled: true },
+    }
+    return JSON.stringify(report, null, 1)
+  }
+
+  it('a multi-page dream report parses FULLY (the silent-truncation regression fence)', async () => {
+    // ~600 ranking entries ≈ ~17k pretty-printed lines: past one 2000-line
+    // page (multi-page), inside the 10-page cap. The OLD single-window read
+    // truncated → tryJson failed → skipped.
+    const files = new Map<string, string>([
+      ['.dreamrsi/config.json', JSON.stringify({ config: {} })],
+      ['.dreamrsi/policies/policy-index.json', JSON.stringify({ activeVersion: 'v0015', versions: [] })],
+      ['.dreamrsi/events.jsonl', ''],
+      ['.dreamrsi/trees', ''],
+      ['.dreamrsi/dreams/d0001.json', bigDreamFile('d0001', 600)],
+    ])
+    const outcome = await load(scriptedRemote(files), sessionId, new AbortController().signal)
+    expect(outcome.kind).toBe('loaded')
+    if (outcome.kind !== 'loaded') return
+    // The report PARSED (the old code yielded zero dreams here).
+    expect(outcome.data.dreams).toHaveLength(1)
+    expect(outcome.data.dreams[0]).toMatchObject({
+      runId: 'd0001',
+      selectedName: 'deep-marker-d0001',
+      validWorlds: 600,
+      worldCount: 600, // the FULL ranking arrived — proof of the paged join
+      meanScore: 41.2,
+    })
+    expect(outcome.data.dreamFailures).toEqual([])
+  })
+
+  it('a dream that still fails surfaces as a per-file failure, never silent', async () => {
+    const files = new Map<string, string>([
+      ['.dreamrsi/config.json', JSON.stringify({ config: {} })],
+      ['.dreamrsi/policies/policy-index.json', JSON.stringify({ activeVersion: 'v0015', versions: [] })],
+      ['.dreamrsi/events.jsonl', ''],
+      ['.dreamrsi/dreams/d0001.json', bigDreamFile('d0001', 20)],
+      // d0002 exists in the listing but its READ fails (non-not-found error).
+      ['.dreamrsi/dreams/d0002.json', 'SENTINEL-ERROR'],
+    ])
+    const remote = scriptedRemote(files)
+    const failing = remote.workspaceFiles.read
+    remote.workspaceFiles.read = async (id, path, range, signal) =>
+      path.endsWith('d0002.json')
+        ? { ok: false, error: { code: 'workspace-file/too-large', message: 'lines exceed the byte cap' } }
+        : failing(id, path, range, signal)
+    const outcome = await load(remote, sessionId, new AbortController().signal)
+    if (outcome.kind !== 'loaded') throw new Error('expected a loaded dashboard')
+    // The readable report parses; the broken one is SURFACED, not dropped silently.
+    expect(outcome.data.dreams).toHaveLength(1)
+    expect(outcome.data.dreamFailures).toEqual([
+      { file: 'd0002.json', reason: 'lines exceed the byte cap' },
+    ])
+  })
+
+  it('a truncated-at-page-cap report is surfaced as malformed, not parsed from half a file', async () => {
+    // 25k-line report: past the 10-page cap (10 × 2000). The joined text is
+    // incomplete → the parse verdict is surfaced with the truncation reason.
+    const files = new Map<string, string>([
+      ['.dreamrsi/config.json', JSON.stringify({ config: {} })],
+      ['.dreamrsi/policies/policy-index.json', JSON.stringify({ activeVersion: 'v0015', versions: [] })],
+      ['.dreamrsi/events.jsonl', ''],
+      ['.dreamrsi/dreams/d0009.json', bigDreamFile('d0009', 12000)],
+    ])
+    const outcome = await load(scriptedRemote(files), sessionId, new AbortController().signal)
+    if (outcome.kind !== 'loaded') throw new Error('expected a loaded dashboard')
+    expect(outcome.data.dreams).toEqual([])
+    expect(outcome.data.dreamFailures).toHaveLength(1)
+    expect(outcome.data.dreamFailures[0]?.file).toBe('d0009.json')
+    expect(outcome.data.dreamFailures[0]?.reason).toContain('truncated')
+  })
+})

@@ -18,6 +18,7 @@ function sampleData(rounds = 1): DashboardData {
     forest: [],
     dreams: [],
     dreamsTruncated: false,
+    dreamFailures: [],
     events: [],
     eventsTruncated: false,
   }

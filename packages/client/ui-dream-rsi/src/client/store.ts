@@ -9,6 +9,7 @@
 import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
 import type { DreamRow, EventRow, PolicyRow, RoundRow, StoreConfig } from './read.ts'
 import type { IterationPoint, RoundNodes } from './progression.ts'
+import type { DreamFailure } from './face.ts'
 
 /** Everything the panel draws, derived from the store files at refresh time. */
 export interface DashboardData {
@@ -32,6 +33,8 @@ export interface DashboardData {
   dreams: DreamRow[]
   /** Whether the dreams list was cut by the read cap. */
   dreamsTruncated: boolean
+  /** Dream reports that could not be read or parsed (surfaced, never silent). */
+  dreamFailures: DreamFailure[]
   /** The last events on the log, oldest first. */
   events: EventRow[]
   /** Whether the events page hit the read cap before the file's end. */

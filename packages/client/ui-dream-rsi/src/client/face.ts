@@ -33,10 +33,13 @@ import type { DashboardData, createDreamRsiStore } from './store.ts'
 export const DREAM_CAP = 8
 /** How many leading event lines the panel reads. */
 export const EVENT_PAGE_LINES = 120
-/** Lines per nodes.jsonl page. */
-export const NODES_PAGE_LINES = 2000
+/** Lines per paged text page (nodes.jsonl, dream reports). */
+export const PAGE_LINES = 2000
 /** Page cap for one round's nodes read (≈10k nodes). */
 export const NODES_PAGE_CAP = 5
+/** Page cap for one dream report (the harness caps one page at 5000 lines / 2 MiB; a
+ * 205KB pretty-printed report is ~4-5k lines, so a few 2000-line pages cover it). */
+export const DREAM_PAGE_CAP = 10
 
 /** The slice of the Client Remote this package calls. */
 export type WorkspaceFilesRemote = Pick<ClientRemote, 'workspaceFiles'>
@@ -82,6 +85,48 @@ async function readJsonFile(
   const result = await remote.workspaceFiles.read(sessionId, path, { offset: 1, limit: 2000 }, signal)
   if (!result.ok) return undefined
   return result.value.text
+}
+
+/** The outcome of a full paged text read. */
+export type PagedTextOutcome =
+  | { kind: 'loaded'; text: string; truncated: boolean }
+  | { kind: 'not-found' }
+  | { kind: 'failed'; message: string }
+
+/**
+ * Read one text file WHOLE, page by page, until the file's end.
+ *
+ * The workspace file read is bounded by a LINE WINDOW (the request's limit)
+ * and a per-page BYTE cap (the host refuses an over-cap page with
+ * `workspace-file/too-large` — it never truncates), so a big file read in
+ * one short window comes back TRUNCATED with `eof: false`. The dream
+ * reports (180–205KB pretty-printed JSON, ~4-5k lines) exceed any single
+ * 2000-line window — the reader must loop until `eof` and JOIN the pages
+ * before parsing (the same discipline the nodes reader already had).
+ * @param pageLines - lines per page (must stay within the host's maxLines cap).
+ * @param pageCap - maximum pages (a hard bound on one file's read).
+ * @returns the joined text, or the failure kind; `truncated` flags a page-cap cutoff.
+ */
+export async function readTextPaged(
+  remote: WorkspaceFilesRemote,
+  sessionId: SessionId,
+  path: string,
+  signal: AbortSignal,
+  pageLines: number,
+  pageCap: number,
+): Promise<PagedTextOutcome> {
+  const pages: string[] = []
+  for (let page = 0; page < pageCap; page += 1) {
+    const offset = page * pageLines + 1
+    const result = await remote.workspaceFiles.read(sessionId, path, { offset, limit: pageLines }, signal)
+    if (!result.ok) {
+      if (page === 0 && result.error.code === 'workspace-file/not-found') return { kind: 'not-found' }
+      return { kind: 'failed', message: result.error.message }
+    }
+    pages.push(result.value.text)
+    if (result.value.eof) return { kind: 'loaded', text: pages.join('\n'), truncated: false }
+  }
+  return { kind: 'loaded', text: pages.join('\n'), truncated: true }
 }
 
 /** Read the first page of a text file; undefined on any failure. */
@@ -159,6 +204,14 @@ export type NodesOutcome =
   | { kind: 'loaded'; nodes: NodeRow[]; truncated: boolean }
   | { kind: 'failed'; message: string }
 
+/** One dream report that could not be read or parsed (surfaced, never silent). */
+export interface DreamFailure {
+  /** The dream file's name (dNNNN.json). */
+  file: string
+  /** Why it failed (the read error, or the parse verdict). */
+  reason: string
+}
+
 /**
  * Read every file the dashboard draws, then derive.
  *
@@ -194,6 +247,7 @@ export async function load(
   const policies: PolicyRow[] = index?.versions ?? []
   const rounds: RoundRow[] = trees?.rounds ?? []
   const dreamRows: DreamRow[] = dreams?.dreams ?? []
+  const dreamFailures: DreamFailure[] = dreams?.failures ?? []
   const events: EventRow[] = eventsPage === undefined ? [] : parseEventsPage(eventsPage.text)
 
   // Phase 2: every round's nodes — the iteration progression AND the forest
@@ -221,6 +275,7 @@ export async function load(
     forest,
     dreams: dreamRows,
     dreamsTruncated: dreams?.truncated ?? false,
+    dreamFailures,
     events,
     eventsTruncated: eventsPage !== undefined && !eventsPage.eof,
   }
@@ -248,12 +303,18 @@ async function listRoundRows(
   return { rounds, truncated: listing.truncated }
 }
 
-/** The dreams/ directory: report rows newest first, cut to the cap. */
+/** The dreams/ directory: report rows newest first, cut to the cap.
+ *
+ * Each report is read WHOLE via paged reads (the reports are 180–205KB
+ * pretty-printed JSON — ~4-5k lines, past any single line window). A report
+ * that still fails to read or parse is SURFACED as a per-file failure
+ * instead of silently dropped (W11).
+ */
 async function listDreamRows(
   remote: WorkspaceFilesRemote,
   sessionId: SessionId,
   signal: AbortSignal,
-): Promise<{ dreams: DreamRow[]; truncated: boolean } | undefined> {
+): Promise<{ dreams: DreamRow[]; truncated: boolean; failures: DreamFailure[] } | undefined> {
   const listing = await listDir(remote, sessionId, `${STORE_DIR}/dreams`, signal)
   if (listing === undefined) return undefined
   const ids = listing.names
@@ -261,13 +322,28 @@ async function listDreamRows(
     .sort(descending)
     .slice(0, DREAM_CAP)
   const dreams: DreamRow[] = []
+  const failures: DreamFailure[] = []
   for (const name of ids) {
-    const text = await readJsonFile(remote, sessionId, `${STORE_DIR}/dreams/${name}`, signal)
-    if (text === undefined) continue
-    const row = parseDreamReport(text, name.replace(/\.json$/, ''))
-    if (row !== undefined) dreams.push(row)
+    const path = `${STORE_DIR}/dreams/${name}`
+    const outcome = await readTextPaged(remote, sessionId, path, signal, PAGE_LINES, DREAM_PAGE_CAP)
+    if (outcome.kind === 'failed') {
+      failures.push({ file: name, reason: outcome.message })
+      continue
+    }
+    if (outcome.kind === 'not-found') continue
+    const row = parseDreamReport(outcome.text, name.replace(/\.json$/, ''))
+    if (row === undefined) {
+      failures.push({
+        file: name,
+        reason: outcome.truncated
+          ? 'truncated at the page cap — the report is larger than the reader bound'
+          : 'malformed JSON',
+      })
+      continue
+    }
+    dreams.push(row)
   }
-  return { dreams, truncated: listing.truncated }
+  return { dreams, truncated: listing.truncated, failures }
 }
 
 /** Newest-first order for zero-padded ids (r0010 sorts before r0009). */
@@ -289,22 +365,11 @@ export async function loadNodes(
   signal: AbortSignal,
 ): Promise<NodesOutcome> {
   const path = `${STORE_DIR}/trees/${roundId}/nodes.jsonl`
-  const lines: string[] = []
-  let truncated = false
-  for (let page = 0; page < NODES_PAGE_CAP; page += 1) {
-    const offset = page * NODES_PAGE_LINES + 1
-    const result = await remote.workspaceFiles.read(sessionId, path, { offset, limit: NODES_PAGE_LINES }, signal)
-    if (!result.ok) {
-      if (page === 0 && result.error.code === 'workspace-file/not-found') {
-        // A directory without nodes.jsonl is an empty tree, not an error.
-        return { kind: 'loaded', nodes: [], truncated: false }
-      }
-      return { kind: 'failed', message: result.error.message }
-    }
-    const { text, eof } = result.value
-    lines.push(text)
-    if (eof) return { kind: 'loaded', nodes: parseNodesPage(lines.join('\n')), truncated: false }
+  const outcome = await readTextPaged(remote, sessionId, path, signal, PAGE_LINES, NODES_PAGE_CAP)
+  if (outcome.kind === 'not-found') {
+    // A directory without nodes.jsonl is an empty tree, not an error.
+    return { kind: 'loaded', nodes: [], truncated: false }
   }
-  truncated = true
-  return { kind: 'loaded', nodes: parseNodesPage(lines.join('\n')), truncated }
+  if (outcome.kind === 'failed') return { kind: 'failed', message: outcome.message }
+  return { kind: 'loaded', nodes: parseNodesPage(outcome.text), truncated: outcome.truncated }
 }

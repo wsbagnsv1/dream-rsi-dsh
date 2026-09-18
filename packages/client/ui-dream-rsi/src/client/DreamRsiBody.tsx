@@ -17,6 +17,7 @@ import type { DreamRow, PolicyRow, RoundRow } from './read.ts'
 import { computeProgression, eraOf, sliceWindow, STAR_GLYPH, starRound, type EraFilter } from './progression.ts'
 import { ProgressionChart } from './ProgressionChart.tsx'
 import { ForestGraph } from './ForestGraph.tsx'
+import type { DreamFailure } from './face.ts'
 import type { DashboardData, DreamRsiTabState, createDreamRsiStore } from './store.ts'
 import type { DreamRsiInjected } from './face.ts'
 import { TreeGraph } from './TreeGraph.tsx'
@@ -127,6 +128,7 @@ const css = {
   roundsScroll: {
     maxHeight: 380, overflowY: 'auto',
   } satisfies React.CSSProperties,
+  failureLine: { color: 'var(--dsh-danger-fg, #c33)', padding: '2px 0', fontSize: 11 } satisfies React.CSSProperties,
 }
 
 /**
@@ -285,10 +287,23 @@ function DreamItem({ dream, t }: { dream: DreamRow; t: PropsLocale<'dreamRsi'>['
   )
 }
 
-/** The dream reports list. */
-function DreamsList({ dreams, t }: { dreams: readonly DreamRow[]; t: PropsLocale<'dreamRsi'>['t'] }): ReactNode {
-  if (dreams.length === 0) return <div style={css.note}>{t('dreams.empty')}</div>
-  return <ul style={css.lineage}>{dreams.map(dream => <DreamItem key={dream.runId} dream={dream} t={t} />)}</ul>
+/** The dream reports list (unreadable reports surface as per-file notes, never silent). */
+function DreamsList({ dreams, failures, t }: {
+  dreams: readonly DreamRow[]
+  failures: readonly DreamFailure[]
+  t: PropsLocale<'dreamRsi'>['t']
+}): ReactNode {
+  if (dreams.length === 0 && failures.length === 0) return <div style={css.note}>{t('dreams.empty')}</div>
+  return (
+    <>
+      <ul style={css.lineage}>{dreams.map(dream => <DreamItem key={dream.runId} dream={dream} t={t} />)}</ul>
+      {failures.map(failure => (
+        <div key={failure.file} style={css.failureLine} data-dream-rsi-dream-failure={failure.file}>
+          {t('dreams.readFailed', { file: failure.file, reason: failure.reason })}
+        </div>
+      ))}
+    </>
+  )
 }
 
 /** The events tail. */
@@ -574,7 +589,7 @@ export function DreamRsiBody({
 
           <div style={css.sectionGap} />
           <div style={{ ...css.cardTitle, marginBottom: 4 }}>{t('dreams.title')}</div>
-          <DreamsList dreams={data.dreams} t={t} />
+          <DreamsList dreams={data.dreams} failures={data.dreamFailures} t={t} />
           {data.dreamsTruncated && <div style={css.note}>{t('truncatedDreams', { count: data.dreams.length })}</div>}
 
           <div style={css.sectionGap} />

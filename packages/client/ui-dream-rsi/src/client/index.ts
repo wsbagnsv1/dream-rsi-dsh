@@ -27,8 +27,11 @@ export type { LayoutOptions, LayoutPosition, TreeLayout } from './tree-layout.ts
 export { layoutTree, scoreColor } from './tree-layout.ts'
 export type { ForestBand, ForestLayout, ForestOptions, ForestRound } from './forest-layout.ts'
 export { layoutForest } from './forest-layout.ts'
-export type { IterationPoint, PolicyMarker, Progression, RoundNodes } from './progression.ts'
-export { computeProgression, roundColor, thinIndices, toIterationNodes, X_LABEL_CAP } from './progression.ts'
+export type { Era, EraFilter, IterationPoint, PolicyMarker, Progression, RoundNodes } from './progression.ts'
+export {
+  computeProgression, eraOf, roundColor, thinIndices, toIterationNodes,
+  SCORE_ERA_THRESHOLD, X_LABEL_CAP,
+} from './progression.ts'
 export type { ProgressionChartProps } from './ProgressionChart.tsx'
 export type {
   Champion, DreamRow, EventRow, NodeRow, PolicyIndex, PolicyRow, RoundRow, StoreConfig, TreeIndex,

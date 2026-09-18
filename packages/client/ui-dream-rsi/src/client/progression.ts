@@ -34,6 +34,33 @@ export interface IterationPoint {
   policyVersion?: string | undefined
   /** Whether the score is the −∞ replay floor (drawn clamped, excluded from the domain). */
   floored: boolean
+  /** The round's objective era (undefined when the round carries no score to classify). */
+  era?: Era | undefined
+}
+
+/**
+ * The objective era of a round's score scale: scores from different eras are
+ * NOT comparable (a 1000/median-ms speed score is not a sum_radii ratio), so
+ * the panel tags them and keeps the comparable climb separate.
+ */
+export type Era = 'ratio' | 'raw'
+
+/**
+ * The era threshold: a round whose bestScore exceeds this is a raw-scale
+ * legacy probe/toy round; at or below it, the ratio-scale objective era
+ * (sum_radii / 2.635). Documented panel constant — 10 sits far above every
+ * circle-packing ratio seen (≤ 2.64) and far below every probe score (≥ 50).
+ */
+export const SCORE_ERA_THRESHOLD = 10
+
+/**
+ * Classify one round's score scale (deterministic heuristic).
+ * @param bestScore - the round's best score (from round.json stats).
+ * @returns the era, or undefined when the round carries no numeric score.
+ */
+export function eraOf(bestScore: number | undefined): Era | undefined {
+  if (typeof bestScore !== 'number' || Number.isNaN(bestScore)) return undefined
+  return bestScore > SCORE_ERA_THRESHOLD ? 'raw' : 'ratio'
 }
 
 /** A round's nodes as the face read them (one loadNodes outcome). */
@@ -42,6 +69,8 @@ export interface RoundNodes {
   nodes: readonly NodeRow[]
   /** The nodes read hit the page cap before the file's end. */
   truncated: boolean
+  /** The round's objective era, classified from its best score. */
+  era?: Era | undefined
 }
 
 /** One policy-change marker: the first node logged under a new policy version. */
@@ -107,20 +136,43 @@ export function toIterationNodes(rounds: readonly RoundNodes[]): { iterations: I
         ...(node.failClass !== undefined ? { failClass: node.failClass } : {}),
         ...(node.policyVersion !== undefined ? { policyVersion: node.policyVersion } : {}),
         floored: score <= FLOORED_SCORE / 2,
+        ...(round.era !== undefined ? { era: round.era } : {}),
       })
     }
   }
   return { iterations, truncated }
 }
 
+/** Which objective eras the progression includes. */
+export type EraFilter = 'ratio' | 'raw' | 'all'
+
+/** Options of {@link computeProgression}. */
+export interface ProgressionOptions {
+  /**
+   * Which objective eras to include. `'ratio'` (the comparable climb —
+   * sum_radii / 2.635) or `'raw'` (legacy probe/toy rounds) keeps that era
+   * only; `'all'` (the default) includes everything. Unclassified rounds
+   * (no numeric round score) ride with `'all'` and `'raw'` — they are not
+   * provably ratio-scale.
+   */
+  eraFilter?: EraFilter | undefined
+}
+
 /**
  * Compute the progression: the Pareto frontier through every subpoint, the
  * policy markers at iteration indices, and the y domain.
  * @param iterations - the chronological iteration sequence (see {@link toIterationNodes}).
- * @returns the progression; empty points yield an empty model.
+ * @param options - the era filter (default `'all'`).
+ * @returns the progression; empty points yield an empty model. Filtering
+ *   happens before re-indexing, so iteration indices, markers, and the
+ *   domain are always dense over the INCLUDED set.
  */
-export function computeProgression(iterations: readonly IterationPoint[]): Progression {
-  const points: IterationPoint[] = iterations.map((point, iteration) => ({ ...point, iteration }))
+export function computeProgression(iterations: readonly IterationPoint[], options: ProgressionOptions = {}): Progression {
+  const eraFilter = options.eraFilter ?? 'all'
+  const included = eraFilter === 'all'
+    ? iterations
+    : iterations.filter((point) => eraFilter === 'ratio' ? point.era === 'ratio' : point.era !== 'ratio')
+  const points: IterationPoint[] = included.map((point, iteration) => ({ ...point, iteration }))
 
   const markers: PolicyMarker[] = []
   let lastSeenVersion: string | undefined

@@ -14,7 +14,7 @@ import { IconRefreshOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
 import { deriveChampion, FLOORED_SCORE, totalNodes } from './read.ts'
 import type { DreamRow, PolicyRow, RoundRow } from './read.ts'
-import { computeProgression } from './progression.ts'
+import { computeProgression, eraOf, type EraFilter } from './progression.ts'
 import { ProgressionChart } from './ProgressionChart.tsx'
 import { ForestGraph } from './ForestGraph.tsx'
 import type { DashboardData, DreamRsiTabState, createDreamRsiStore } from './store.ts'
@@ -201,20 +201,33 @@ function RoundsTable({ rounds, t }: { rounds: readonly RoundRow[]; t: PropsLocal
           </tr>
         </thead>
         <tbody>
-          {rounds.map(round => (
-            <tr key={round.roundId} data-dream-rsi-round={round.roundId}>
-              <td style={css.td}>{round.roundId}</td>
-              <td style={css.td}>{round.status === 'open' ? t('rounds.open') : t('rounds.closed')}</td>
-              <td style={css.td}>{round.policyVersion ?? ''}</td>
-              <td style={{ ...css.td, ...css.tdNum }}>{round.nodes === undefined ? '' : String(round.nodes)}</td>
-              <td style={{ ...css.td, ...css.tdNum }}>{round.attempts === undefined ? '' : String(round.attempts)}</td>
-              <td style={{ ...css.td, ...css.tdNum }} data-dream-rsi-best={round.bestScore === undefined ? '' : String(round.bestScore)}>
-                {round.bestScore === undefined ? '' : scoreText(round.bestScore)}
-              </td>
-            </tr>
-          ))}
+          {rounds.map(round => {
+            const era = eraOf(round.bestScore)
+            return (
+              <tr key={round.roundId} data-dream-rsi-round={round.roundId} data-dream-rsi-era={era ?? ''}>
+                <td style={css.td}>{round.roundId}</td>
+                <td style={css.td}>{round.status === 'open' ? t('rounds.open') : t('rounds.closed')}</td>
+                <td style={css.td}>{round.policyVersion ?? ''}</td>
+                <td style={{ ...css.td, ...css.tdNum }}>{round.nodes === undefined ? '' : String(round.nodes)}</td>
+                <td style={{ ...css.td, ...css.tdNum }}>{round.attempts === undefined ? '' : String(round.attempts)}</td>
+                <td style={{ ...css.td, ...css.tdNum }} data-dream-rsi-best={round.bestScore === undefined ? '' : String(round.bestScore)}>
+                  {round.bestScore === undefined ? '' : scoreText(round.bestScore)}
+                  {era !== undefined && (
+                    <span
+                      style={{ ...css.chip, marginLeft: 6, fontSize: 10 }}
+                      data-dream-rsi-era-tag={era}
+                      title={t('progress.erasNote')}
+                    >
+                      {era === 'ratio' ? t('rounds.scaleRatio') : t('rounds.scaleRaw')}
+                    </span>
+                  )}
+                </td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
+      <div style={css.note} data-dream-rsi='eras-note'>{t('progress.erasNote')}</div>
     </div>
   )
 }
@@ -265,14 +278,44 @@ function EventsTail({ data, t }: { data: DashboardData; t: PropsLocale<'dreamRsi
   )
 }
 
-/** The progression section: every iteration's subpoint and the Pareto frontier. */
+/**
+ * The progression section: every iteration's subpoint and the Pareto frontier.
+ *
+ * DEFAULT filter: the ratio-scale era only (the comparable climb —
+ * sum_radii / 2.635). Legacy raw-probe rounds (incompatible objective scales:
+ * speed scores, sanity probes) are toggled in with a checkbox; including
+ * them stretches the y-domain, so they are off by default. The frontier,
+ * the markers, and the domain all recompute over the included set.
+ */
 function ProgressionSection({ data, t }: { data: DashboardData; t: PropsLocale<'dreamRsi'>['t'] }): ReactNode {
-  const progression = useMemo(() => computeProgression(data.attempts), [data.attempts])
-  if (progression.points.length === 0) return null
+  const [includeLegacy, setIncludeLegacy] = useState(false)
+  const eraFilter: EraFilter = includeLegacy ? 'all' : 'ratio'
+  const progression = useMemo(
+    () => computeProgression(data.attempts, { eraFilter }),
+    [data.attempts, eraFilter],
+  )
+  const hasRaw = data.attempts.some(point => point.era === 'raw')
+  if (progression.points.length === 0 && !hasRaw) return null
   return (
     <div style={css.card} data-dream-rsi='progression-card'>
       <div style={css.cardTitle}>{t('progress.title')}</div>
-      <ProgressionChart progression={progression} t={t} />
+      <div style={css.treeToolbar}>
+        {hasRaw && (
+          <label style={css.treeField}>
+            <input
+              type='checkbox'
+              checked={includeLegacy}
+              onChange={(event) => { setIncludeLegacy(event.target.checked) }}
+              data-dream-rsi='progression-legacy-toggle'
+            />
+            <span>{t('progress.includeLegacy')}</span>
+          </label>
+        )}
+        <span style={css.note}>{t('progress.erasNote')}</span>
+      </div>
+      {progression.points.length === 0
+        ? <div style={css.note}>{t('progress.ratioOnlyEmpty')}</div>
+        : <ProgressionChart progression={progression} t={t} />}
       {data.attemptsTruncated && <div style={css.note}>{t('tree.truncated', { count: data.attempts.length })}</div>}
     </div>
   )

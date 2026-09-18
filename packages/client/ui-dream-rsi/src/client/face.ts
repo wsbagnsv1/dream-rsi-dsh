@@ -25,7 +25,7 @@ import {
   parseStoreConfig, STORE_DIR,
 } from './read.ts'
 import type { DreamRow, EventRow, NodeRow, PolicyRow, RoundRow } from './read.ts'
-import { toIterationNodes } from './progression.ts'
+import { eraOf, toIterationNodes } from './progression.ts'
 import type { RoundNodes } from './progression.ts'
 import type { DashboardData, createDreamRsiStore } from './store.ts'
 
@@ -199,12 +199,14 @@ export async function load(
   // Phase 2: every round's nodes — the iteration progression AND the forest
   // view draw from the same read. Rounds are few (the listing cap); each read
   // pages internally. A round whose nodes fail to read contributes nothing —
-  // the same degrade-softly discipline.
+  // the same degrade-softly discipline. Each round carries its objective era
+  // (classified from its best score) so the chart can keep scales apart.
   const forest = await Promise.all(rounds.map(async (round): Promise<RoundNodes> => {
+    const era = eraOf(round.bestScore)
     const outcome = await loadNodes(remote, sessionId, round.roundId, signal)
     return outcome.kind === 'loaded'
-      ? { roundId: round.roundId, nodes: outcome.nodes, truncated: outcome.truncated }
-      : { roundId: round.roundId, nodes: [], truncated: false }
+      ? { roundId: round.roundId, nodes: outcome.nodes, truncated: outcome.truncated, ...(era !== undefined ? { era } : {}) }
+      : { roundId: round.roundId, nodes: [], truncated: false, ...(era !== undefined ? { era } : {}) }
   }))
   const { iterations, truncated: nodesTruncated } = toIterationNodes(forest)
 

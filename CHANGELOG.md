@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.4.2 — objective-era awareness
+
+- **User report fix**: the Best-score column mixed incompatible objective
+  scales (a 1000/median-ms speed score and 100/75/50 sanity probes next to
+  the circle-packing ratios). The panel now classifies each round's scale
+  with a deterministic heuristic: bestScore > 10 → raw-scale (legacy
+  probe/toy era), ≤ 10 → ratio-scale (the sum_radii / 2.635 objective era);
+  threshold 10 as the documented constant `SCORE_ERA_THRESHOLD`.
+- Rounds table: every Best-score cell carries a scale tag (`ratio` /
+  `raw·probe`), with the legend note "scores from different objective eras
+  are tagged"; raw values stay visible (honest) but clearly not comparable.
+- Progression chart DEFAULTS to the ratio-scale era — the comparable climb —
+  with the Pareto frontier over valid ratio attempts; legacy probes are
+  toggled in ("include legacy probes", default off; their inclusion stretches
+  the y-domain). Filtering recomputes iteration indices, markers, and the
+  domain over the included set. Unclassified rounds (no numeric round score)
+  ride with raw/all, never with ratio.
+- Tests: +11 era.spec (live-store classification: 588.062/100/75/50 → raw,
+  0.951–2.636 → ratio, boundary inclusivity; era propagation; default
+  filter; ratio-only frontier; toggle semantics). Package suite: 81.
+
 ## 0.4.1 — all-rounds visibility (no cap)
 
 - **User report fix**: the panel capped visibility at the latest 12 rounds

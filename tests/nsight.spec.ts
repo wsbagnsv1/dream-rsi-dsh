@@ -17,38 +17,42 @@ import {
   runNsightBench,
   type NsightSubprocessService,
 } from '../src/nsight.ts'
-import { cleanupTempRoots, makeTempRoot } from './fixtures.ts'
+import { cleanupTempRoots, makeTempRoot, must } from './fixtures.ts'
 
 afterEach(async () => {
   await cleanupTempRoots()
 })
 
 // ---------------------------------------------------------------------------
-// Realistic ncu --csv fixture (captured from ncu 2025.1.0, two kernels × 2 launches)
+// Realistic ncu --csv fixture (locale-formatted, as ncu 2025.1 emits on
+// European-locale Windows: periods=thousands, commas=decimal)
 // ---------------------------------------------------------------------------
 
 const NCU_CSV_FIXTURE = [
-  '==PROF== Connected to Process 12345',
-  '"ID","Process ID","Process Name","Host Name","Kernel Name","Kernel Time","Context","Stream","Section Name","Metric Name","Metric Unit","Metric Value"',
-  '"0","12345","python.exe","localhost","void sweep_kernel<float, 256>",,,,,"gpu__time_duration.sum","nsecond","1250000"',
-  '"0","12345","python.exe","localhost","void sweep_kernel<float, 256>",,,,,"dram__bytes.sum","Mbyte","12.50"',
-  '"0","12345","python.exe","localhost","void sweep_kernel<float, 256>",,,,,"sm__throughput.avg.pct_of_peak_sustained_elapsed","%","72.30"',
-  '"0","12345","python.exe","localhost","void sweep_kernel<float, 256>",,,,,"launch__occupancy_limit_blocks","","8"',
-  '"0","12345","python.exe","localhost","void sweep_kernel<float, 256>",,,,,"launch__grid_size","","128"',
-  '"0","12345","python.exe","localhost","void sweep_kernel<float, 256>",,,,,"launch__block_size","","256"',
-  '"1","12345","python.exe","localhost","void sweep_kernel<float, 256>",,,,,"gpu__time_duration.sum","nsecond","1500000"',
-  '"1","12345","python.exe","localhost","void sweep_kernel<float, 256>",,,,,"dram__bytes.sum","Mbyte","14.20"',
-  '"1","12345","python.exe","localhost","void sweep_kernel<float, 256>",,,,,"sm__throughput.avg.pct_of_peak_sustained_elapsed","%","68.10"',
-  '"1","12345","python.exe","localhost","void sweep_kernel<float, 256>",,,,,"launch__occupancy_limit_blocks","","8"',
-  '"1","12345","python.exe","localhost","void sweep_kernel<float, 256>",,,,,"launch__grid_size","","128"',
-  '"1","12345","python.exe","localhost","void sweep_kernel<float, 256>",,,,,"launch__block_size","","256"',
-  '"2","12345","python.exe","localhost","reduce_kernel<int>",,,,,"gpu__time_duration.sum","nsecond","800000"',
-  '"2","12345","python.exe","localhost","reduce_kernel<int>",,,,,"dram__bytes.sum","Mbyte","2.10"',
-  '"2","12345","python.exe","localhost","reduce_kernel<int>",,,,,"sm__throughput.avg.pct_of_peak_sustained_elapsed","%","45.60"',
-  '"2","12345","python.exe","localhost","reduce_kernel<int>",,,,,"launch__occupancy_limit_blocks","","16"',
-  '"2","12345","python.exe","localhost","reduce_kernel<int>",,,,,"launch__grid_size","","64"',
-  '"2","12345","python.exe","localhost","reduce_kernel<int>",,,,,"launch__block_size","","128"',
-  '==PROF== Disconnected from Process 12345',
+  '==PROF== Connected to Process 143016',
+  '"ID","Process ID","Process Name","Host Name","Kernel Name","Context","Stream","Block Size","Grid Size","Device","CC","Section Name","Metric Name","Metric Unit","Metric Value"',
+  // ampere_sgemm launch 0 (the matmul kernel — ground truth ~117 µs from CUDA events)
+  '"0","143016","python.exe","127.0.0.1","ampere_sgemm_128x64_nn","1","7","(512, 1, 1)","(128, 1, 1)","0","8.9","Command line profiler metrics","gpu__time_duration.sum","ns","117.344"',
+  '"0","143016","python.exe","127.0.0.1","ampere_sgemm_128x64_nn","1","7","(512, 1, 1)","(128, 1, 1)","0","8.9","Command line profiler metrics","dram__bytes.sum","byte","27.595.520"',
+  '"0","143016","python.exe","127.0.0.1","ampere_sgemm_128x64_nn","1","7","(512, 1, 1)","(128, 1, 1)","0","8.9","Command line profiler metrics","sm__throughput.avg.pct_of_peak_sustained_elapsed","%","65,77"',
+  '"0","143016","python.exe","127.0.0.1","ampere_sgemm_128x64_nn","1","7","(512, 1, 1)","(128, 1, 1)","0","8.9","Command line profiler metrics","launch__occupancy_limit_blocks","block","24"',
+  '"0","143016","python.exe","127.0.0.1","ampere_sgemm_128x64_nn","1","7","(512, 1, 1)","(128, 1, 1)","0","8.9","Command line profiler metrics","launch__block_size","","128"',
+  '"0","143016","python.exe","127.0.0.1","ampere_sgemm_128x64_nn","1","7","(512, 1, 1)","(128, 1, 1)","0","8.9","Command line profiler metrics","launch__grid_size","","512"',
+  // ampere_sgemm launch 1 (the same kernel launched again — slightly different timing)
+  '"1","143016","python.exe","127.0.0.1","ampere_sgemm_128x64_nn","1","7","(512, 1, 1)","(128, 1, 1)","0","8.9","Command line profiler metrics","gpu__time_duration.sum","ns","120.416"',
+  '"1","143016","python.exe","127.0.0.1","ampere_sgemm_128x64_nn","1","7","(512, 1, 1)","(128, 1, 1)","0","8.9","Command line profiler metrics","dram__bytes.sum","byte","30.818.944"',
+  '"1","143016","python.exe","127.0.0.1","ampere_sgemm_128x64_nn","1","7","(512, 1, 1)","(128, 1, 1)","0","8.9","Command line profiler metrics","sm__throughput.avg.pct_of_peak_sustained_elapsed","%","65,63"',
+  '"1","143016","python.exe","127.0.0.1","ampere_sgemm_128x64_nn","1","7","(512, 1, 1)","(128, 1, 1)","0","8.9","Command line profiler metrics","launch__occupancy_limit_blocks","block","24"',
+  '"1","143016","python.exe","127.0.0.1","ampere_sgemm_128x64_nn","1","7","(512, 1, 1)","(128, 1, 1)","0","8.9","Command line profiler metrics","launch__block_size","","128"',
+  '"1","143016","python.exe","127.0.0.1","ampere_sgemm_128x64_nn","1","7","(512, 1, 1)","(128, 1, 1)","0","8.9","Command line profiler metrics","launch__grid_size","","512"',
+  // reduce kernel (1 launch)
+  '"2","143016","python.exe","127.0.0.1","void at::reduce_kernel<512, 1>","1","7","(512, 1, 1)","(1, 123, 1)","0","8.9","Command line profiler metrics","gpu__time_duration.sum","ns","14.912"',
+  '"2","143016","python.exe","127.0.0.1","void at::reduce_kernel<512, 1>","1","7","(512, 1, 1)","(1, 123, 1)","0","8.9","Command line profiler metrics","dram__bytes.sum","byte","2.348.544"',
+  '"2","143016","python.exe","127.0.0.1","void at::reduce_kernel<512, 1>","1","7","(512, 1, 1)","(1, 123, 1)","0","8.9","Command line profiler metrics","sm__throughput.avg.pct_of_peak_sustained_elapsed","%","6,70"',
+  '"2","143016","python.exe","127.0.0.1","void at::reduce_kernel<512, 1>","1","7","(512, 1, 1)","(1, 123, 1)","0","8.9","Command line profiler metrics","launch__occupancy_limit_blocks","block","24"',
+  '"2","143016","python.exe","127.0.0.1","void at::reduce_kernel<512, 1>","1","7","(512, 1, 1)","(1, 123, 1)","0","8.9","Command line profiler metrics","launch__grid_size","","123"',
+  '"2","143016","python.exe","127.0.0.1","void at::reduce_kernel<512, 1>","1","7","(512, 1, 1)","(1, 123, 1)","0","8.9","Command line profiler metrics","launch__block_size","","512"',
+  '==PROF== Disconnected from Process 143016',
 ].join('\n')
 
 // ---------------------------------------------------------------------------
@@ -66,46 +70,71 @@ describe('parseCsvLine', () => {
 })
 
 describe('parseMetricValue', () => {
-  it('parses plain numbers, comma-separated, and K/M/G suffixed values', () => {
+  it('parses plain numbers and K/M/G suffixed values', () => {
     expect(parseMetricValue('1234')).toBe(1234)
-    expect(parseMetricValue('1,234.5')).toBe(1234.5)
-    expect(parseMetricValue('12.50')).toBe(12.5)
     expect(parseMetricValue('2 K')).toBe(2000)
     expect(parseMetricValue('3 M')).toBe(3_000_000)
   })
+
+  it('parses ncu LOCALE-formatted numbers (European-locale Windows: periods=thousands, commas=decimal)', () => {
+    // The 1000× regression: "117.344" is 117344 (period thousands), NOT 117.344.
+    expect(parseMetricValue('117.344')).toBe(117344)
+    // Percentages use comma decimals: "65,77" = 65.77%, not 677.
+    expect(parseMetricValue('65,77')).toBeCloseTo(65.77, 6)
+    // Byte counts with period thousands: "27.595.520" = 27595520.
+    expect(parseMetricValue('27.595.520')).toBe(27595520)
+    // Mixed separators: the rightmost is the decimal one.
+    expect(parseMetricValue('1.234,567')).toBeCloseTo(1234.567, 6)
+    expect(parseMetricValue('1,234.567')).toBeCloseTo(1234.567, 6)
+  })
 })
 
-describe('parseNcuCsv (fixture-based)', () => {
+describe('parseNcuCsv (fixture-based, locale-formatted real ncu output)', () => {
   it('parses the fixture into 2 kernels with correct aggregation', () => {
     const result = parseNcuCsv(NCU_CSV_FIXTURE)
     expect(result.kernels).toHaveLength(2)
-    expect(result.kernels_launched).toBe(3) // sweep × 2 + reduce × 1
+    expect(result.kernels_launched).toBe(3) // sgemm × 2 + reduce × 1
 
-    const sweep = result.kernels.find(k => k.name.includes('sweep_kernel'))
-    expect(sweep).toBeDefined()
-    expect(sweep!.launches).toBe(2)
-    // duration: 1250000ns = 1250µs, 1500000ns = 1500µs → mean 1375
-    expect(sweep!.duration_us.mean).toBeCloseTo(1375, 0)
-    expect(sweep!.duration_us.min).toBeCloseTo(1250, 0)
-    expect(sweep!.duration_us.max).toBeCloseTo(1500, 0)
-    expect(sweep!.dram_bytes.mean).toBeCloseTo(13.35, 1)
-    expect(sweep!.sm_throughput_pct.mean).toBeCloseTo(70.2, 1)
-    expect(sweep!.occupancy_limit.mean).toBe(8)
-    expect(sweep!.grid_size).toBe(128)
-    expect(sweep!.block_size).toBe(256)
+    const sgemm = result.kernels.find(k => k.name.includes('ampere_sgemm'))
+    expect(sgemm).toBeDefined()
+    expect(sgemm!.launches).toBe(2)
+    // durations: "117.344" ns → 117344 ns → 117.344 µs; "120.416" → 120.416 µs
+    expect(sgemm!.duration_us.mean).toBeCloseTo(118.88, 2)
+    expect(sgemm!.duration_us.min).toBeCloseTo(117.344, 2)
+    expect(sgemm!.duration_us.max).toBeCloseTo(120.416, 2)
+    // dram: 27595520 + 30818944 → mean 29207232
+    expect(sgemm!.dram_bytes.mean).toBeCloseTo(29207232, 0)
+    // sm: 65.77 + 65.63 → mean 65.7
+    expect(sgemm!.sm_throughput_pct.mean).toBeCloseTo(65.7, 1)
+    expect(sgemm!.occupancy_limit.mean).toBe(24)
+    expect(sgemm!.grid_size).toBe(512)
+    expect(sgemm!.block_size).toBe(128)
 
     const reduce = result.kernels.find(k => k.name.includes('reduce_kernel'))
     expect(reduce).toBeDefined()
     expect(reduce!.launches).toBe(1)
-    // 800000ns = 800µs
-    expect(reduce!.duration_us.mean).toBeCloseTo(800, 0)
-    expect(reduce!.dram_bytes.mean).toBeCloseTo(2.1, 1)
+    // "14.912" ns → 14912 ns → 14.912 µs
+    expect(reduce!.duration_us.mean).toBeCloseTo(14.912, 2)
+    expect(reduce!.dram_bytes.mean).toBeCloseTo(2348544, 0)
+    expect(reduce!.sm_throughput_pct.mean).toBeCloseTo(6.7, 1)
+    expect(reduce!.grid_size).toBe(123)
+    expect(reduce!.block_size).toBe(512)
+  })
+
+  it('REGRESSION FENCE: the sgemm duration parses to the ~117 µs band, never 1000× low', () => {
+    const result = parseNcuCsv(NCU_CSV_FIXTURE)
+    const sgemm = must(result.kernels.find(k => k.name.includes('ampere_sgemm')))
+    // CUDA event ground truth on this host: 114–124 µs for the 1024² matmul.
+    // The 1000× bug parsed 117.344 as ns → 0.117 µs; the fence pins the band.
+    expect(sgemm.duration_us.mean).toBeGreaterThan(100)
+    expect(sgemm.duration_us.mean).toBeLessThan(130)
+    expect(sgemm.duration_us.mean).toBeCloseTo(118.88, 2)
   })
 
   it('computes total_duration_us as sum of per-kernel mean × launches', () => {
     const result = parseNcuCsv(NCU_CSV_FIXTURE)
-    // sweep: 1375 × 2 = 2750; reduce: 800 × 1 = 800 → total 3550
-    expect(result.total_duration_us).toBeCloseTo(3550, 0)
+    // sgemm: 118.88 × 2 = 237.76; reduce: 14.912 × 1 → total 252.672
+    expect(result.total_duration_us).toBeCloseTo(252.672, 2)
   })
 
   it('returns empty kernels for a CSV with no data rows', () => {

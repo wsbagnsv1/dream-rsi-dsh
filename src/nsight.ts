@@ -114,14 +114,58 @@ function durationToUs(value: number, unit: string): number {
   return value
 }
 
-/** Parse a metric value: strip commas, K/M/G suffixes ncu sometimes emits. */
+/**
+ * Parse a metric value from ncu's CSV output, handling the locale-dependent
+ * number formatting ncu inherits from the host system.
+ *
+ * On European-locale Windows (this deployment), ncu emits numbers with:
+ * - PERIODS as thousands separators: `"117.344"` = 117344
+ * - COMMAS as decimal separators: `"65,77"` = 65.77
+ * - Both in one value: `"1.234,567"` = 1234.567
+ *
+ * The rightmost separator is always the decimal one; all others are
+ * thousands separators. This is verified against CUDA event timing
+ * (ampere_sgemm_128x64_nn: ncu 117.344 "ns" = 117344 ns = 117.344 µs ≈
+ * CUDA events 114–124 µs).
+ */
 export function parseMetricValue(raw: string): number {
-  const cleaned = raw.trim().replace(/,/g, '')
-  const multiplier = cleaned.endsWith(' K') ? 1e3
-    : cleaned.endsWith(' M') ? 1e6
-      : cleaned.endsWith(' G') ? 1e9
+  const cleaned = raw.trim()
+  if (cleaned.length === 0) return Number.NaN
+  const hasPeriods = cleaned.includes('.')
+  const hasCommas = cleaned.includes(',')
+
+  let normalized: string
+  if (hasPeriods && hasCommas) {
+    // Both present: the RIGHTMOST separator is the decimal one.
+    const lastPeriod = cleaned.lastIndexOf('.')
+    const lastComma = cleaned.lastIndexOf(',')
+    if (lastComma > lastPeriod) {
+      // European: comma = decimal, periods = thousands.
+      normalized = cleaned.replace(/\./g, '').replace(',', '.')
+    } else {
+      // US: period = decimal, commas = thousands.
+      normalized = cleaned.replace(/,/g, '')
+    }
+  } else if (hasCommas) {
+    // Commas only: in ncu's locale-formatted output this is a DECIMAL
+    // separator (e.g. "65,77" = 65.77% SM throughput).
+    normalized = cleaned.replace(/,/g, '.')
+  } else if (hasPeriods) {
+    // Periods only: in ncu's locale-formatted output these are THOUSANDS
+    // separators (e.g. "117.344" = 117344 ns, "27.595.520" = 27595520 bytes).
+    // A single period followed by exactly 3 digits could be either — but ncu
+    // on this locale always uses periods as thousands, so strip them.
+    normalized = cleaned.replace(/\./g, '')
+  } else {
+    normalized = cleaned
+  }
+
+  // K/M/G suffix handling (ncu sometimes appends these in non-CSV output).
+  const multiplier = normalized.endsWith(' K') ? 1e3
+    : normalized.endsWith(' M') ? 1e6
+      : normalized.endsWith(' G') ? 1e9
         : 1
-  const numeric = multiplier === 1 ? cleaned : cleaned.slice(0, -2).trim()
+  const numeric = multiplier === 1 ? normalized : normalized.slice(0, -2).trim()
   const parsed = Number(numeric)
   return Number.isFinite(parsed) ? parsed * multiplier : Number.NaN
 }

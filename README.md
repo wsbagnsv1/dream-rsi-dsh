@@ -201,6 +201,31 @@ def solve(view: dict) -> dict:
   same Eq. 1 scoring, batch validation (≤ W, selectable-only, no
   parent+child), and selection guards.
 
+## Nsight kernel benchmarking (`dreamrsi_nsight_bench`)
+
+The eighth tool wraps **NVIDIA Nsight Compute** (`ncu --csv`) so the
+discovery agent benchmarks CUDA kernels with **real profiling signals** —
+GPU duration, DRAM traffic, SM throughput, and occupancy — not just
+wall-clock. This is the KernelBench-domain fit (paper domain 3): the
+optimization objective includes hardware-level efficiency, which a naive
+timer cannot measure.
+
+**Usage**: pass the kernel-runner command (e.g. `python bench_kernel.py`);
+the tool runs `ncu --csv --metrics <set> --target-processes all <command>`,
+parses the CSV report, and returns per-kernel aggregations (launch count,
+duration µs mean/min/max, DRAM bytes mean, SM throughput % mean, occupancy
+limit mean, grid/block size) plus total duration and a launch count.
+
+**Default metric set**: `gpu__time_duration.sum`, `dram__bytes.sum`,
+`sm__throughput.avg.pct_of_peak_sustained_elapsed`,
+`launch__occupancy_limit_blocks`, `launch__grid_size`,
+`launch__block_size`. Override with the `metrics` parameter.
+
+**Requirements**: ncu (Nsight Compute) on PATH + a CUDA-capable GPU. The
+tool never crashes the cycle — every failure mode (ncu missing, target
+non-zero exit, no kernels launched, timeout) surfaces as a clean error or
+diagnostic. A system-level integration test runs when ncu is available.
+
 ## Data model
 
 ```

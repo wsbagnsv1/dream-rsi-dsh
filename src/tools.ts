@@ -12,9 +12,10 @@
 import type { AnyToolDefinition, ToolExecuteContext } from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { EngineError, type DreamEngine } from './engine.ts'
+import { runNsightBench } from './nsight.ts'
 import type { DecisionInput } from './types.ts'
 
-/** The registered tool names, in registration order (spec §7). */
+/** The registered tool names, in registration order (spec §7 + v0.2 nsight). */
 export const DREAMRSI_TOOLS = [
   'dreamrsi_begin_round',
   'dreamrsi_log_decision',
@@ -23,6 +24,7 @@ export const DREAMRSI_TOOLS = [
   'dreamrsi_dream',
   'dreamrsi_policy_get',
   'dreamrsi_policy_set',
+  'dreamrsi_nsight_bench',
 ] as const
 
 /**
@@ -384,6 +386,46 @@ export function buildToolDefinitions(engine: DreamEngine): AnyToolDefinition[] {
           ...(args.notes !== undefined ? { notes: args.notes } : {}),
           ...(args.force !== undefined ? { force: args.force } : {}),
         }, { workspaceRoot: resolveWorkspace(exec).root })
+      },
+    }),
+
+    defineTool({
+      name: 'dreamrsi_nsight_bench',
+      description: 'Profile CUDA kernels with Nsight Compute (ncu --csv). Runs the given kernel-runner command under ncu, parses the CSV report, and returns per-kernel aggregated metrics (duration µs, DRAM bytes, SM throughput %, occupancy limit, grid/block size) across all launches. Use this to BENCHMARK kernel optimizations with real profiling signals — duration, memory traffic, and occupancy — not just wall-clock. Requires ncu (Nsight Compute) on PATH and a CUDA-capable GPU. The target command should launch the kernels you want profiled.',
+      parameters: {
+        command: {
+          type: 'string',
+          required: true,
+          description: 'The kernel-runner command that launches the CUDA kernels (e.g. "python bench_kernel.py" or "./my_kernel_bench"). Split on whitespace.',
+        },
+        metrics: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Nsight Compute metric names (default: gpu__time_duration.sum, dram__bytes.sum, sm__throughput.avg.pct_of_peak_sustained_elapsed, launch__occupancy_limit_blocks, launch__grid_size, launch__block_size).',
+        },
+        label: { type: 'string', description: 'Optional label for this benchmark run (returned in notes).' },
+        timeout: { type: 'integer', description: 'Wall-clock budget in milliseconds (default 120000).' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          description: '{ kernels: [{ name, launches, duration_us: {mean,min,max}, dram_bytes: {mean}, sm_throughput_pct: {mean}, occupancy_limit: {mean}, grid_size, block_size }], total_duration_us, kernels_launched, notes: string[], exitCode, stderr, timedOut }',
+        },
+        render: jsonRender,
+      },
+      async execute(args, exec) {
+        if (engine.subprocess === undefined) {
+          throw new EngineError('nsight bench requires the subprocess service (inject: subprocess)')
+        }
+        return runNsightBench({
+          command: args.command,
+          ...(args.metrics !== undefined ? { metrics: args.metrics } : {}),
+          ...(args.timeout !== undefined ? { timeout: args.timeout } : {}),
+          cwd: resolveWorkspace(exec).root,
+          subprocess: engine.subprocess as import('./nsight.ts').NsightSubprocessService,
+          signal: exec.signal,
+        })
       },
     }),
   ]

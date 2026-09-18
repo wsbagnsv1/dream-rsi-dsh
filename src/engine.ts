@@ -142,7 +142,8 @@ export class DreamEngine {
   private readonly config: PluginConfig
   private readonly defaultRoot: string
   private readonly clock: () => Date
-  private readonly subprocess: SubprocessService | undefined
+  /** The subprocess seam for code policies and the ncu benchmark tool. */
+  readonly subprocess: SubprocessService | undefined
   private readonly llm: LlmRuntime | undefined
   private readonly workspaces = new Map<string, WorkspaceState>()
 

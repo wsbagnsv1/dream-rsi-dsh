@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.4.8 — Nsight Compute kernel-benchmarking tool (`dreamrsi_nsight_bench`)
+
+- NEW TOOL: `dreamrsi_nsight_bench` wraps `ncu --csv --metrics …
+  --target-processes all <command>` (NVIDIA Nsight Compute) through the
+  `ctx.subprocess` seam, giving the discovery agent REAL GPU profiling
+  signals for KernelBench-domain optimizations — GPU duration (µs,
+  mean/min/max across launches), DRAM bytes, SM throughput %, occupancy
+  limit, and grid/block launch configuration.
+- CSV parser: long-format ncu report (one row per kernel-launch × metric)
+  with quoted-field CSV, ==PROF==/==WARNING== diagnostic stripping, unit
+  normalization (ns/µs/ms → µs), and per-kernel aggregation (launch count,
+  mean/min/max duration, mean for the other metrics).
+- Failure modes (never crash the cycle): ncu missing → clean install
+  guidance; target non-zero exit → stderr propagation; no CUDA kernels →
+  empty result + note; timeout → terminate + partial results.
+- DREAMRSI_TOOLS grows from 7 to 8 (`dreamrsi_nsight_bench`); the preset
+  row already injects `subprocess` (F1 prerequisite).
+- 14 tests: CSV parser against a realistic multi-kernel fixture, metric
+  aggregation, subprocess execution (mocked), failure paths, default
+  metric set, and one real-ncu integration test (skipIf no ncu).
+
 ## 0.4.7 — dream reports read whole (paged reads past the line window)
 
 - **User report fix**: the panel showed "Dreams: 0" while dreams/ held 37

@@ -61,7 +61,7 @@ const decision = (overrides: Record<string, unknown> = {}): Record<string, unkno
 })
 
 describe('tool registration (spec §7)', () => {
-  it('exposes exactly the seven spec tools in registration order', () => {
+  it('exposes exactly the spec tools in registration order (7 RSI loop + nsight bench)', () => {
     expect(DREAMRSI_TOOLS).toEqual([
       'dreamrsi_begin_round',
       'dreamrsi_log_decision',
@@ -70,6 +70,7 @@ describe('tool registration (spec §7)', () => {
       'dreamrsi_dream',
       'dreamrsi_policy_get',
       'dreamrsi_policy_set',
+      'dreamrsi_nsight_bench',
     ])
   })
 

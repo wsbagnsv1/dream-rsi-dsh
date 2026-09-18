@@ -1,0 +1,124 @@
+/**
+ * `dreamRsi` namespace dictionaries, and the namespace's declaration.
+ *
+ * The namespace merge lives with its key set so that any module naming
+ * `TranslateNS<'dreamRsi'>` needs only this file. Simplified Chinese is the
+ * key-set source of truth, matching the DSH client convention.
+ */
+import type {} from '@deepseek-ai/dsh-client-ui-slots'
+
+declare module '@deepseek-ai/dsh-client-ui-slots' {
+  interface LocaleNamespaceMap {
+    /** Dream-RSI campaign dashboard copy. */
+    dreamRsi: DreamRsiKey
+  }
+}
+
+/** Simplified Chinese dictionary and key-set source of truth. */
+export const zh = {
+  'type.label': 'Dream-RSI',
+  'guide.title': 'Dream-RSI 战役面板',
+  'guide.description': '查看 .dreamrsi/ 发现库的实时状态',
+  loading: '正在读取 .dreamrsi/ …',
+  refreshedAt: '更新于 {time}',
+  refresh: '刷新',
+  'empty.title': '还没有 .dreamrsi/ 发现库',
+  'empty.hint': '在 Dream-RSI 预设的会话里运行 dreamrsi_begin_round 后，这里会显示战役的实时状态。',
+  'error.title': '读取失败',
+  'error.retry': '重试',
+  'champion.title': '当前最优',
+  'champion.bestScore': '最佳分数',
+  'champion.round': '来自轮次',
+  'champion.policy': '打包程序',
+  'champion.activePolicy': '现行策略',
+  'champion.kind': '类型',
+  'champion.none': '还没有已评测的轮次。',
+  'champion.dreams': '做梦次数',
+  'champion.rounds': '轮次',
+  'champion.nodes': '节点',
+  'lineage.title': '策略演化（v0001 → 现行）',
+  'lineage.empty': '还没有策略版本。',
+  'lineage.active': '现行',
+  'lineage.retired': '退役',
+  'lineage.parent': '由 {parent} 派生',
+  'lineage.root': '初始版本',
+  'rounds.title': '轮次',
+  'rounds.empty': '还没有轮次。',
+  'rounds.round': '轮次',
+  'rounds.status': '状态',
+  'rounds.policy': '策略',
+  'rounds.nodes': '节点',
+  'rounds.attempts': '尝试',
+  'rounds.best': '最佳分数',
+  'rounds.open': '进行中',
+  'rounds.closed': '已关闭',
+  'rounds.summary': '摘要',
+  'dreams.title': '做梦报告',
+  'dreams.empty': '还没有做梦报告。',
+  'dreams.selected': '选中候选',
+  'dreams.validWorlds': '有效世界',
+  'dreams.noRegression': '无回退守卫',
+  'dreams.floored': '触底',
+  'dreams.score': '均分',
+  'events.title': '最近事件',
+  'events.empty': '还没有事件。',
+  'worlds': '{count} / {total}',
+  'truncatedRounds': '只显示最近 {count} 个轮次。',
+  'truncatedDreams': '只显示最近 {count} 份报告。',
+} satisfies Record<string, string>
+
+/** Dream-RSI dashboard dictionary key union. */
+export type DreamRsiKey = keyof typeof zh
+
+/** English dictionary, checked against the Chinese key set. */
+export const en = {
+  'type.label': 'Dream-RSI',
+  'guide.title': 'Dream-RSI campaign dashboard',
+  'guide.description': 'Live state of the .dreamrsi/ discovery store',
+  loading: 'Reading .dreamrsi/…',
+  refreshedAt: 'Updated {time}',
+  refresh: 'Refresh',
+  'empty.title': 'No .dreamrsi/ discovery store yet',
+  'empty.hint': 'Run dreamrsi_begin_round in a session on the Dream-RSI preset, and the campaign state appears here.',
+  'error.title': 'Read failed',
+  'error.retry': 'Retry',
+  'champion.title': 'Champion',
+  'champion.bestScore': 'Best score',
+  'champion.round': 'From round',
+  'champion.policy': 'Packaged program',
+  'champion.activePolicy': 'Active policy',
+  'champion.kind': 'Kind',
+  'champion.none': 'No evaluated round yet.',
+  'champion.dreams': 'Dreams',
+  'champion.rounds': 'Rounds',
+  'champion.nodes': 'Nodes',
+  'lineage.title': 'Policy lineage (v0001 → active)',
+  'lineage.empty': 'No policy versions yet.',
+  'lineage.active': 'active',
+  'lineage.retired': 'retired',
+  'lineage.parent': 'from {parent}',
+  'lineage.root': 'bootstrap',
+  'rounds.title': 'Rounds',
+  'rounds.empty': 'No rounds yet.',
+  'rounds.round': 'Round',
+  'rounds.status': 'Status',
+  'rounds.policy': 'Policy',
+  'rounds.nodes': 'Nodes',
+  'rounds.attempts': 'Attempts',
+  'rounds.best': 'Best score',
+  'rounds.open': 'open',
+  'rounds.closed': 'closed',
+  'rounds.summary': 'Summary',
+  'dreams.title': 'Dream reports',
+  'dreams.empty': 'No dream reports yet.',
+  'dreams.selected': 'Selected candidate',
+  'dreams.validWorlds': 'Valid worlds',
+  'dreams.noRegression': 'No-regression guard',
+  'dreams.floored': 'floored',
+  'dreams.score': 'Mean score',
+  'events.title': 'Recent events',
+  'events.empty': 'No events yet.',
+  'worlds': '{count} / {total}',
+  'truncatedRounds': 'Showing the latest {count} rounds.',
+  'truncatedDreams': 'Showing the latest {count} reports.',
+} satisfies Record<DreamRsiKey, string>

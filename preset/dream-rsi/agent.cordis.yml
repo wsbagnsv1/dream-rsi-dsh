@@ -339,3 +339,21 @@
     # reveals nothing. Set 'rco' to re-enable §5.3 similarity-estimated
     # outcomes for novel actions (documented extension caveats).
     estimate: 'off'
+
+# ── dream-rsi web UI (client plugin) ────────────────────────────────────────
+
+# The browser-side dashboard: a right-Sidebar page type rendering the live
+# state of the workspace's .dreamrsi/ store (champion, policy lineage, rounds,
+# dream reports) READ-ONLY through the workspaceFiles pipe.
+#
+# PLANE NOTE: this row mounts the package's HOST half on the agent plane, which
+# keeps the preset self-describing but does NOT by itself deliver the browser
+# half — the web boot graph is composed from the HOST composition's loader
+# entries, and preset subtrees are deliberately invisible to that scan. The
+# browser bundle is served when the package is ALSO mounted in the host
+# composition (profile patch insert row + linked package; `install.ps1
+# -WithWebUI` wires both, or see packages/client/ui-dream-rsi/README.md).
+# If the deployment mounts the client package on the host plane already, this
+# row is still safe: same package, one Loader source.
+- id: ui-dream-rsi
+  name: '../../packages/client/ui-dream-rsi/lib/index.js'

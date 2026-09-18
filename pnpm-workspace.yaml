@@ -2,3 +2,8 @@
 # esbuild's postinstall is required by vitest.
 allowBuilds:
   esbuild: true
+
+# Workspace packages: the server plugin lives at the root; the client plugin
+# (web UI panel) is the standalone package under packages/client/.
+packages:
+  - packages/client/ui-dream-rsi

@@ -67,9 +67,10 @@ powershell -File install.ps1
 ./install.sh
 ```
 
-The installer copies `preset/dream-rsi/` into `<dshHome>/.agent-presets/` and rewrites the plugin entry to an absolute path. Then: start DSH Web, open the **new-session preset picker**, choose **Dream-RSI**.
+The installer copies `preset/dream-rsi/` into `<dshHome>/.agent-presets/` and rewrites the plugin entries to absolute paths (both the server plugin and the web UI package). Then: start DSH Web, open the **new-session preset picker**, choose **Dream-RSI**.
 
 - `install.ps1 -PrintOverlay` / `./install.sh --print-overlay` prints a *roots-discovery* overlay instead (see Option B).
+- `install.ps1 -WithWebUI` additionally mounts the **sidebar dashboard** into the web profile (see [Web UI panel](#web-ui-panel) below).
 
 ### Option B — roots overlay (no copy)
 
@@ -106,6 +107,35 @@ Any session (even without the preset) can also **delegate directly onto the pres
 ```
 
 Background delegation is recommended for long campaigns.
+
+## Web UI panel
+
+A client plugin (`packages/client/ui-dream-rsi/`) adds a **Dream-RSI campaign dashboard** to the DSH right Sidebar — the same class of surface as the workspace file tree and the document preview. It reads the session workspace's `.dreamrsi/` store **read-only** through the workspace-files pipe and renders:
+
+- **Champion card** — best score across rounds (and the round + policy that produced it), the active policy version/name/kind, round/node/dream totals;
+- **Policy lineage** — the full `v0001 → vNNNN` timeline with statuses, kinds, and derivation;
+- **Rounds table** — per-round status, policy, nodes, attempts, best score (latest 12);
+- **Dream reports** — selected candidate, mean replay score, valid-world counts, floored/invalid diagnostics (latest 8);
+- **Events tail** — the last lines of `events.jsonl`;
+- a **Refresh** control (the store updates while campaigns run), and a graceful empty state when the workspace has no `.dreamrsi/` yet.
+
+Mount it with the installer:
+
+```sh
+powershell -File install.ps1 -WithWebUI   # preset copy + link the package into the web profile + patch insert
+```
+
+or manually: link `packages/client/ui-dream-rsi` into the web profile's `node_modules` (`"@dreamrsi/dsh-client-ui-dream-rsi": "link:<abs>/packages/client/ui-dream-rsi"` in the profile `package.json`, then `pnpm install` inside the profile) and insert the row into the profile's `cordis.patch.yml`:
+
+```yaml
+- insert:
+    - id: ui-dream-rsi
+      name: '@dreamrsi/dsh-client-ui-dream-rsi'
+```
+
+Then restart `dsh web` and pick **Dream-RSI campaign dashboard** from the right Sidebar's guide page.
+
+> **Why two planes:** the browser boot graph is composed from the *host* composition's loader entries — preset subtrees are deliberately invisible to that scan. The preset's `ui-dream-rsi` row mounts the package's host half (keeping the preset self-describing); the *browser half* is delivered by the host-plane row above. The panel is read-only: it never writes to the store.
 
 ## Configuration
 
@@ -201,7 +231,8 @@ src/
   tools.ts     The seven model-facing tool definitions
   dsh-ambient.d.ts  Type-only mirrors of the DSH runtime surfaces (standalone typecheck)
 bench/perf-gate.ts  v0.2 F4 scale gate (poolSize × worlds wall-time)
-preset/dream-rsi/   The agent preset (full standard assembly + the plugin row + workflow persona)
+preset/dream-rsi/   The agent preset (full standard assembly + the plugin rows + workflow persona)
+packages/client/ui-dream-rsi/   The web UI panel plugin (browser half: sidebar campaign dashboard)
 tests/              Vitest suite (engine, tools, preset shape, per-workspace isolation,
                     code-policy protocol, real-validator regression fence)
 docs/DREAM-RSI-SPEC.md   Implementation-grade spec distilled from the paper

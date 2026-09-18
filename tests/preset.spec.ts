@@ -242,8 +242,7 @@ describe('preset discovery overlay (examples/) — no host mount in the preset p
   })
 })
 
-describe('v0.2 paper-faithful preset row (task-15 fences)', () => {
-  /** The dream-rsi row of the preset composition. */
+describe('v0.2 paper-faithful preset row (task-15 fences)', () => {  /** The dream-rsi row of the preset composition. */
   async function dreamRow(): Promise<{ row: Row; raw: string }> {
     const text = await readFile(path.join(PRESET_DIR, 'agent.cordis.yml'), 'utf8')
     const doc = await readYaml(path.join(PRESET_DIR, 'agent.cordis.yml'))
@@ -288,6 +287,44 @@ describe('v0.2 paper-faithful preset row (task-15 fences)', () => {
     expect(name).toContain('dist/index.js')
     // Sanitized repo: no absolute machine paths anywhere in the preset.
     expect(raw).not.toMatch(/[A-Z]:\\|\/Users\//)
+  })
+})
+
+describe('web UI client row (ui-dream-rsi)', () => {
+  const CLIENT_PACKAGE = path.join(PACKAGE_ROOT, 'packages', 'client', 'ui-dream-rsi')
+
+  it('mounts the client package alongside the server row, resolving to an existing entry file', async () => {
+    const doc = await readYaml(path.join(PRESET_DIR, 'agent.cordis.yml')) as Row[]
+    const row = must((doc as Row[]).find((entry) => entry.id === 'ui-dream-rsi'))
+    const name = String(row.name)
+    const resolved = path.isAbsolute(name) ? name : path.resolve(PRESET_DIR, name)
+    expect(existsSync(resolved)).toBe(true)
+    const rel = path.relative(PACKAGE_ROOT, resolved).replace(/\\/g, '/')
+    expect(rel).toBe('packages/client/ui-dream-rsi/lib/index.js')
+  })
+
+  it('declares a web-platform dsh.client manifest on the package (the browser boot graph scans for it)', async () => {
+    const manifest = JSON.parse(
+      await readFile(path.join(CLIENT_PACKAGE, 'package.json'), 'utf8'),
+    ) as { name: string; dsh?: { client?: { platform?: string; inject?: string[] } } }
+    expect(manifest.name).toBe('@dreamrsi/dsh-client-ui-dream-rsi')
+    expect(manifest.dsh?.client?.platform).toBe('web')
+    expect(manifest.dsh?.client?.inject).toContain('@deepseek-ai/dsh-api-workspace-files')
+  })
+
+  it('ships the built browser bundle in the client-module closure-factory format', async () => {
+    const bundle = await readFile(path.join(CLIENT_PACKAGE, 'lib', 'client.js'), 'utf8')
+    expect(bundle).toContain('window.__ModuleLoader__.load({ id: "@dreamrsi/dsh-client-ui-dream-rsi", factory: (require) => {')
+    expect(bundle).toContain('return module.exports; } });')
+    // Platform modules stay external: they resolve through the module table.
+    expect(bundle).toContain('require("@deepseek-ai/dsh-client-store")')
+  })
+
+  it('carries the two-stage registration in its client sources (type + keyed pane body)', async () => {
+    const source = await readFile(path.join(CLIENT_PACKAGE, 'src', 'client', 'index.ts'), 'utf8')
+    expect(source).toContain('ctx.sidebarRightTabs.register')
+    expect(source).toContain("ctx.slots.inject('sidebar.right.pane.tab'")
+    expect(source).toContain('ctx.locale.register(NS, { zh, en })')
   })
 })
 

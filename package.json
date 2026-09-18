@@ -13,12 +13,16 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc -p tsconfig.build.json",
-    "test": "vitest run --passWithNoTests"
+    "typecheck:webui": "pnpm --dir packages/client/ui-dream-rsi typecheck",
+    "build": "tsc -p tsconfig.build.json && pnpm --dir packages/client/ui-dream-rsi build",
+    "build:webui": "pnpm --dir packages/client/ui-dream-rsi build",
+    "test": "vitest run",
+    "test:webui": "pnpm --dir packages/client/ui-dream-rsi test"
   },
   "private": true,
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.7.0",
     "vitest": "^3.2.4",
     "yaml": "^2.6.1"

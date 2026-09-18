@@ -109,16 +109,14 @@ export function dreamRsiFace(
   return (sessionId: SessionId, actions: FaceActions): DreamRsiInjected => {
     /** Per tab: the refresh generation; the latest request wins. */
     const generations = new Map<string, number>()
-    /** Per tab: the tree-read generation, independent of the dashboard's. */
-    const treeGenerations = new Map<string, number>()
-    const nextGeneration = (map: Map<string, number>, tabId: string): number => {
-      const generation = (map.get(tabId) ?? 0) + 1
-      map.set(tabId, generation)
+    const nextGeneration = (tabId: string): number => {
+      const generation = (generations.get(tabId) ?? 0) + 1
+      generations.set(tabId, generation)
       return generation
     }
     const refresh = (tabId: string, signal: AbortSignal): void => {
       if (signal.aborted) return
-      const generation = nextGeneration(generations, tabId)
+      const generation = nextGeneration(tabId)
       actions.started(tabId)
       void load(remote, sessionId, signal).then((outcome) => {
         if (generations.get(tabId) !== generation) return
@@ -127,22 +125,10 @@ export function dreamRsiFace(
         else actions.failed(tabId, outcome.message)
       })
     }
-    const selectRound = (tabId: string, roundId: string, signal: AbortSignal): void => {
-      if (signal.aborted) return
-      const generation = nextGeneration(treeGenerations, tabId)
-      actions.treeLoading(tabId, roundId)
-      void loadNodes(remote, sessionId, roundId, signal).then((outcome) => {
-        if (treeGenerations.get(tabId) !== generation) return
-        if (outcome.kind === 'loaded') actions.treeLoaded(tabId, roundId, outcome.nodes, outcome.truncated)
-        else actions.treeFailed(tabId, outcome.message)
-      })
-    }
     return {
       refresh,
-      selectRound,
       forget: (tabId: string) => {
         generations.delete(tabId)
-        treeGenerations.delete(tabId)
         actions.forget(tabId)
       },
     }
@@ -157,13 +143,6 @@ export interface DreamRsiInjected {
    * @param signal - the tab record's lifetime.
    */
   readonly refresh: (tabId: string, signal: AbortSignal) => void
-  /**
-   * Read one round's discovery tree into the graph view.
-   * @param tabId - the tab being drawn.
-   * @param roundId - the round whose nodes to read.
-   * @param signal - the tab record's lifetime.
-   */
-  readonly selectRound: (tabId: string, roundId: string, signal: AbortSignal) => void
   /**
    * Drop one tab's state, for a tab record that is gone.
    * @param tabId - the tab that went away.
@@ -219,16 +198,17 @@ export async function load(
   const dreamRows: DreamRow[] = dreams?.dreams ?? []
   const events: EventRow[] = eventsPage === undefined ? [] : parseEventsPage(eventsPage.text)
 
-  // Phase 2: every round's nodes, for the iteration progression. Rounds are
-  // few (the listing cap); each read pages internally. A round whose nodes
-  // fail to read contributes nothing — the same degrade-softly discipline.
-  const nodeLists = await Promise.all(rounds.map(async (round): Promise<RoundNodes> => {
+  // Phase 2: every round's nodes — the iteration progression AND the forest
+  // view draw from the same read. Rounds are few (the listing cap); each read
+  // pages internally. A round whose nodes fail to read contributes nothing —
+  // the same degrade-softly discipline.
+  const forest = await Promise.all(rounds.map(async (round): Promise<RoundNodes> => {
     const outcome = await loadNodes(remote, sessionId, round.roundId, signal)
     return outcome.kind === 'loaded'
       ? { roundId: round.roundId, nodes: outcome.nodes, truncated: outcome.truncated }
       : { roundId: round.roundId, nodes: [], truncated: false }
   }))
-  const { iterations, truncated: nodesTruncated } = toIterationNodes(nodeLists)
+  const { iterations, truncated: nodesTruncated } = toIterationNodes(forest)
 
   const data: DashboardData = {
     config: configText === undefined ? undefined : parseStoreConfig(configText),
@@ -238,6 +218,7 @@ export async function load(
     roundsTruncated: trees?.truncated ?? false,
     attempts: iterations,
     attemptsTruncated: nodesTruncated,
+    forest,
     dreams: dreamRows,
     dreamsTruncated: dreams?.truncated ?? false,
     events,

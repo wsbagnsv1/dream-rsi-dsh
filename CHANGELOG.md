@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.0 — global discovery forest
+
+- **The discovery-tree section goes global** (user directive): the WHOLE
+  accumulated discovery history — every attempt from ALL rounds — renders in
+  one banded view. Each round's tree lays out in its own horizontal band
+  (rounds left→right chronologically, subtle separators + round-id labels),
+  reusing the W2 tidy-tree per band. Nodes keep the score gradient + hover;
+  failed attempts dim.
+- **Global best path**: each round's best chain (highest summed score,
+  root→leaf) concatenated — the champion lineage across rounds — drawn
+  emphasized end-to-end.
+- The round selector becomes an optional FILTER: "all" (default) renders the
+  forest; selecting a round focuses its single tree with the best-path
+  toggle. Both render from the same per-round node lists the refresh already
+  reads — the separate per-round selection slice (`selectRound`, tree
+  actions) is removed from the store and face.
+- Tests: +8 (band ordering/offsets/separators/determinism, position keying,
+  the cross-round champion chain incl. unscored-root and no-score edges).
+  Package suite: 56.
+
 ## 0.3.3 — progression rework: iteration scatter + Pareto frontier
 
 - **Reworked by user directive**: the progression chart now plots EVERY logged

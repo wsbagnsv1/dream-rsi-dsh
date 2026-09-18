@@ -15,6 +15,7 @@ function sampleData(rounds = 1): DashboardData {
     roundsTruncated: false,
     attempts: [],
     attemptsTruncated: false,
+    forest: [],
     dreams: [],
     dreamsTruncated: false,
     events: [],

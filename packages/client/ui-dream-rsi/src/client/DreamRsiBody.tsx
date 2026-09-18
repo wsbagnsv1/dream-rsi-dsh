@@ -16,6 +16,7 @@ import { deriveChampion, FLOORED_SCORE, totalNodes } from './read.ts'
 import type { DreamRow, PolicyRow, RoundRow } from './read.ts'
 import { computeProgression } from './progression.ts'
 import { ProgressionChart } from './ProgressionChart.tsx'
+import { ForestGraph } from './ForestGraph.tsx'
 import type { DashboardData, DreamRsiTabState, createDreamRsiStore } from './store.ts'
 import type { DreamRsiInjected } from './face.ts'
 import { TreeGraph } from './TreeGraph.tsx'
@@ -270,74 +271,77 @@ function ProgressionSection({ data, t }: { data: DashboardData; t: PropsLocale<'
   )
 }
 
+/** The view filter of the discovery-forest section: everything, or one round. */
+type ForestView = 'all' | string
+
 /**
- * The discovery-tree section: round selector, best-path toggle, and the SVG
- * graph of the selected round's nodes. The tree slice loads on demand — the
- * first load picks the latest round in the dashboard's data.
+ * The discovery-forest section: the WHOLE accumulated discovery history —
+ * every attempt from all rounds in one banded view (default), with the
+ * cross-round champion lineage highlighted. The round selector is an
+ * optional FILTER: picking a round focuses its band (the W2 single-tree
+ * view); "all" is the primary mode. Both render from the same already-loaded
+ * per-round node lists — no extra reads, no separate selection state.
  */
 function TreeSection({
-  tabId, signal, state, selectRound, t,
+  data, t,
 }: {
-  tabId: string
-  signal: AbortSignal
-  state: DreamRsiTabState
-  selectRound: DreamRsiInjected['selectRound']
+  data: DashboardData
   t: PropsLocale<'dreamRsi'>['t']
 }): ReactNode {
+  const [view, setView] = useState<ForestView>('all')
   const [showBestPath, setShowBestPath] = useState(true)
-  const { data, tree } = state
-  const roundOptions = data?.rounds ?? []
-  const selected = tree.roundId
+  const forest = data.forest
+  const focused = view === 'all' ? undefined : forest.find(round => round.roundId === view)
+  const nodeCount = forest.reduce((sum, round) => sum + round.nodes.length, 0)
 
   return (
-    <div style={css.card} data-dream-rsi='tree'>
+    <div style={css.card} data-dream-rsi='tree' data-dream-rsi-view={view}>
       <div style={css.cardTitle}>{t('tree.title')}</div>
       <div style={css.treeToolbar}>
         <label style={css.treeField}>
           <span>{t('tree.select')}</span>
           <select
             style={css.treeSelect}
-            value={selected ?? ''}
-            onChange={(event) => {
-              const roundId = event.target.value
-              if (roundId !== '') selectRound(tabId, roundId, signal)
-            }}
-            disabled={roundOptions.length === 0}
+            value={view}
+            onChange={(event) => { setView(event.target.value) }}
             data-dream-rsi='tree-round'
           >
-            {selected !== undefined && !roundOptions.some(round => round.roundId === selected) && (
-              <option value={selected}>{selected}</option>
-            )}
-            {roundOptions.map(round => (
+            <option value='all'>{t('forest.all')}</option>
+            {forest.map(round => (
               <option key={round.roundId} value={round.roundId}>{round.roundId}</option>
             ))}
           </select>
         </label>
-        <label style={css.treeField}>
-          <input
-            type='checkbox'
-            checked={showBestPath}
-            onChange={(event) => { setShowBestPath(event.target.checked) }}
-            data-dream-rsi='tree-best-toggle'
-          />
-          <span>{t('tree.showBestPath')}</span>
-        </label>
+        {view !== 'all' && (
+          <label style={css.treeField}>
+            <input
+              type='checkbox'
+              checked={showBestPath}
+              onChange={(event) => { setShowBestPath(event.target.checked) }}
+              data-dream-rsi='tree-best-toggle'
+            />
+            <span>{t('tree.showBestPath')}</span>
+          </label>
+        )}
+        <span style={css.note}>{t('forest.nodeCount', { count: nodeCount })}</span>
       </div>
 
-      {tree.status === 'failed' && (
-        <div style={css.note} data-dream-rsi='tree-failure'>{tree.failure ?? ''}</div>
-      )}
-      {(tree.status === 'loading' || tree.status === 'idle') && tree.nodes.length === 0 && (
-        <div style={css.note} data-dream-rsi='tree-loading'>{t('tree.loading')}</div>
-      )}
-      {tree.status === 'ready' && tree.nodes.length === 0 && (
-        <div style={css.note} data-dream-rsi='tree-empty'>{t('tree.empty')}</div>
-      )}
-      {tree.nodes.length > 0 && tree.roundId !== undefined && (
+      {nodeCount === 0 && <div style={css.note} data-dream-rsi='tree-empty'>{t('tree.empty')}</div>}
+
+      {view === 'all' && nodeCount > 0 && (
         <>
-          <TreeGraph nodes={tree.nodes} roundId={tree.roundId} showBestPath={showBestPath} t={t} />
-          {tree.truncated && <div style={css.note}>{t('tree.truncated', { count: tree.nodes.length })}</div>}
+          <ForestGraph rounds={forest} t={t} />
+          {data.attemptsTruncated && (
+            <div style={css.note}>{t('tree.truncated', { count: nodeCount })}</div>
+          )}
         </>
+      )}
+
+      {view !== 'all' && focused !== undefined && focused.nodes.length > 0 && (
+        <TreeGraph nodes={focused.nodes} roundId={focused.roundId} showBestPath={showBestPath} t={t} />
+      )}
+      {view !== 'all' && focused !== undefined && focused.nodes.length === 0 && (
+        <div style={css.note} data-dream-rsi='tree-empty'>{t('tree.empty')}</div>
       )}
     </div>
   )
@@ -349,7 +353,7 @@ function TreeSection({
  * @returns the rendered dashboard.
  */
 export function DreamRsiBody({
-  useTabInfo, useStore, refresh, selectRound, forget, t,
+  useTabInfo, useStore, refresh, forget, t,
 }: DreamRsiBodyProps): ReactNode {
   const { tab } = useTabInfo()
   const { signal } = tab
@@ -366,16 +370,6 @@ export function DreamRsiBody({
     if (signal.aborted) return
     refresh(tab.id, signal)
   }, [signal, tab.id, tab.navigation.revision, refresh])
-
-  // The graph view's first load: once the dashboard names rounds and no tree
-  // was chosen yet, read the latest round's nodes.
-  const dataReady = state?.data !== undefined && (state.data.rounds.length > 0)
-  const treeIdle = state !== undefined && state.tree.status === 'idle' && state.tree.roundId === undefined
-  useEffect(() => {
-    if (signal.aborted || !dataReady || !treeIdle || state === undefined) return
-    const latest = state.data?.rounds[0]?.roundId
-    if (latest !== undefined) selectRound(tab.id, latest, signal)
-  }, [signal, dataReady, treeIdle, state, selectRound, tab.id])
 
   const failureShown = state !== undefined && (state.status === 'failed' || state.failure !== undefined)
   const data = state?.data
@@ -429,9 +423,7 @@ export function DreamRsiBody({
 
           <ProgressionSection data={data} t={t} />
 
-          {state !== undefined && (
-            <TreeSection tabId={tab.id} signal={signal} state={state} selectRound={selectRound} t={t} />
-          )}
+          <TreeSection data={data} t={t} />
 
           <div style={css.card} data-dream-rsi='lineage'>
             <div style={css.cardTitle}>{t('lineage.title')}</div>

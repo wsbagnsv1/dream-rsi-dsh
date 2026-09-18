@@ -14,7 +14,7 @@ import { IconRefreshOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
 import { deriveChampion, FLOORED_SCORE, totalNodes } from './read.ts'
 import type { DreamRow, PolicyRow, RoundRow } from './read.ts'
-import { computeProgression, eraOf, type EraFilter } from './progression.ts'
+import { computeProgression, eraOf, STAR_GLYPH, starRound, type EraFilter } from './progression.ts'
 import { ProgressionChart } from './ProgressionChart.tsx'
 import { ForestGraph } from './ForestGraph.tsx'
 import type { DashboardData, DreamRsiTabState, createDreamRsiStore } from './store.ts'
@@ -129,27 +129,49 @@ const css = {
   } satisfies React.CSSProperties,
 }
 
-/** The champion card: the campaign's best result and where the program stands. */
+/**
+ * The champion card: the campaign's best result and where the program stands.
+ *
+ * The HEADLINE is the ratio-era champion — the best valid ratio-scale round
+ * (the sum_radii / 2.635 objective the project is about), starred. The
+ * raw-era best (legacy probes, incompatible scale) never headlines: it
+ * appears only as a clearly-tagged secondary line.
+ */
 function ChampionCard({ data, t }: { data: DashboardData; t: PropsLocale<'dreamRsi'>['t'] }): ReactNode {
-  const champion = deriveChampion(data.rounds)
+  const ratioRounds = data.rounds.filter(round => eraOf(round.bestScore) === 'ratio')
+  const rawRounds = data.rounds.filter(round => eraOf(round.bestScore) === 'raw')
+  const champion = deriveChampion(ratioRounds)
+  const rawBest = deriveChampion(rawRounds)
   const active = data.policies.find(policy => policy.version === data.activeVersion)
   return (
-    <div className='dream-rsi-champion' style={css.card} data-dream-rsi='champion'>
-      <div style={css.cardTitle}>{t('champion.title')}</div>
+    <div className='dream-rsi-champion' style={css.card} data-dream-rsi='champion' data-dream-rsi-era='ratio'>
+      <div style={css.cardTitle}>
+        {t('champion.title')}
+        <span style={{ ...css.chip, ...css.chipActive, marginLeft: 8 }} data-dream-rsi='champion-era'>
+          {t('rounds.scaleRatio')}
+        </span>
+      </div>
       {champion === undefined
-        ? <div style={css.note}>{t('champion.none')}</div>
+        ? <div style={css.note}>{t('champion.ratioNone')}</div>
         : (
             <div style={css.heroRow}>
               <div style={css.heroCell}>
-                <div style={css.heroMain} data-dream-rsi='champion-score'>{scoreText(champion.score)}</div>
+                <div style={css.heroMain} data-dream-rsi='champion-score'>
+                  <span title={t('forest.bestPath')}>{STAR_GLYPH}</span> {scoreText(champion.score)}
+                </div>
                 <div style={css.heroLabel}>{t('champion.bestScore')}</div>
               </div>
               <div style={css.heroCell}>
-                <div style={{ fontSize: 15, fontWeight: 600 }}>{champion.roundId}</div>
+                <div style={{ fontSize: 15, fontWeight: 600 }} data-dream-rsi='champion-round'>{champion.roundId}</div>
                 <div style={css.heroLabel}>{t('champion.round')}</div>
               </div>
             </div>
           )}
+      {rawBest !== undefined && (
+        <div style={css.note} data-dream-rsi='champion-raw'>
+          {t('champion.rawLegacy', { score: scoreText(rawBest.score), round: rawBest.roundId })}
+        </div>
+      )}
       <div style={css.chips}>
         {active !== undefined && (
           <span style={{ ...css.chip, ...css.chipActive }} data-dream-rsi='active-policy'>
@@ -187,6 +209,7 @@ function LineageItem({ policy, t }: { policy: PolicyRow; t: PropsLocale<'dreamRs
 /** The rounds table: one row per round, newest first, every round reachable (scrolls). */
 function RoundsTable({ rounds, t }: { rounds: readonly RoundRow[]; t: PropsLocale<'dreamRsi'>['t'] }): ReactNode {
   if (rounds.length === 0) return <div style={css.note}>{t('rounds.empty')}</div>
+  const starred = starRound(rounds)
   return (
     <div style={css.roundsScroll} data-dream-rsi='rounds-scroll'>
       <table style={css.table} data-dream-rsi='rounds' data-dream-rsi-round-count={String(rounds.length)}>
@@ -203,9 +226,14 @@ function RoundsTable({ rounds, t }: { rounds: readonly RoundRow[]; t: PropsLocal
         <tbody>
           {rounds.map(round => {
             const era = eraOf(round.bestScore)
+            const isStarred = round.roundId === starred
             return (
-              <tr key={round.roundId} data-dream-rsi-round={round.roundId} data-dream-rsi-era={era ?? ''}>
-                <td style={css.td}>{round.roundId}</td>
+              <tr key={round.roundId} data-dream-rsi-round={round.roundId} data-dream-rsi-era={era ?? ''} data-dream-rsi-starred={isStarred || undefined}>
+                <td style={css.td}>
+                  {isStarred && <span title={t('forest.bestPath')} data-dream-rsi='star'>{STAR_GLYPH}</span>}
+                  {' '}
+                  {round.roundId}
+                </td>
                 <td style={css.td}>{round.status === 'open' ? t('rounds.open') : t('rounds.closed')}</td>
                 <td style={css.td}>{round.policyVersion ?? ''}</td>
                 <td style={{ ...css.td, ...css.tdNum }}>{round.nodes === undefined ? '' : String(round.nodes)}</td>

@@ -5,8 +5,9 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  computeProgression, eraOf, SCORE_ERA_THRESHOLD, toIterationNodes,
+  computeProgression, eraOf, SCORE_ERA_THRESHOLD, starRound, toIterationNodes,
 } from '../src/client/progression.ts'
+import { deriveChampion } from '../src/client/read.ts'
 import type { RoundNodes } from '../src/client/progression.ts'
 import type { NodeRow } from '../src/client/read.ts'
 
@@ -139,5 +140,78 @@ describe('computeProgression eraFilter', () => {
     expect(computeProgression(withUnclassified, { eraFilter: 'ratio' }).points.every(point => point.era === 'ratio')).toBe(true)
     expect(computeProgression(withUnclassified, { eraFilter: 'raw' }).points.some(point => point.roundId === 'r0001')).toBe(true)
     expect(computeProgression(withUnclassified, { eraFilter: 'all' }).points).toHaveLength(7)
+  })
+})
+
+describe('starRound — the best valid ratio-scale round (W7 follow-up)', () => {
+  const rounds = [
+    { roundId: 'r0002', bestScore: 588.062 }, // raw era: never starred
+    { roundId: 'r0005', bestScore: 2.5 },
+    { roundId: 'r0006', bestScore: 2.636 },
+    { roundId: 'r0012', bestScore: 100 }, // raw era
+    { roundId: 'r0013', bestScore: undefined }, // unclassified: never starred
+  ]
+
+  it('stars the highest valid ratio-scale round, in any input order', () => {
+    expect(starRound(rounds)).toBe('r0006')
+    expect(starRound([...rounds].reverse())).toBe('r0006')
+  })
+
+  it('ties keep the first round to reach the score (chronological)', () => {
+    const tied = [
+      { roundId: 'r0009', bestScore: 2.636 },
+      { roundId: 'r0005', bestScore: 2.636 },
+      { roundId: 'r0014', bestScore: 2.5 },
+    ]
+    expect(starRound(tied)).toBe('r0005')
+    expect(starRound([...tied].reverse())).toBe('r0005')
+  })
+
+  it('never stars raw or unclassified rounds even when they score higher', () => {
+    expect(starRound([
+      { roundId: 'r0002', bestScore: 588.062 },
+      { roundId: 'r0001', bestScore: undefined },
+    ])).toBeUndefined()
+  })
+
+  it('an empty list stars nothing', () => {
+    expect(starRound([])).toBeUndefined()
+  })
+})
+
+describe('champion card derivation — the ratio-era champion headlines (W7 follow-up)', () => {
+  it('derives the headline from ratio rounds only; the raw best never headlines', () => {
+    const rounds = [
+      { roundId: 'r0002', policyVersion: 'v0003', bestScore: 588.062 }, // raw era
+      { roundId: 'r0005', policyVersion: 'v0013', bestScore: 2.5 },
+      { roundId: 'r0006', policyVersion: 'v0015', bestScore: 2.6359830849 },
+      { roundId: 'r0012', policyVersion: 'v0005', bestScore: 100 }, // raw era
+    ]
+    const ratioChampion = deriveChampion(rounds.filter(round => eraOf(round.bestScore) === 'ratio'))
+    const rawBest = deriveChampion(rounds.filter(round => eraOf(round.bestScore) === 'raw'))
+    // The card's headline (champion-score) = 2.6359830849 from r0006 — never 588.062.
+    expect(ratioChampion).toEqual({ score: 2.6359830849, roundId: 'r0006', policyVersion: 'v0015' })
+    // The raw best appears only as the tagged secondary line.
+    expect(rawBest).toEqual({ score: 588.062, roundId: 'r0002', policyVersion: 'v0003' })
+    // The star and the headline agree.
+    expect(starRound(rounds)).toBe(ratioChampion?.roundId)
+  })
+
+  it('a store with no ratio rounds headlines nothing (raw stays tagged secondary)', () => {
+    const rounds = [
+      { roundId: 'r0002', bestScore: 588.062 },
+      { roundId: 'r0012', bestScore: 100 },
+    ]
+    expect(deriveChampion(rounds.filter(round => eraOf(round.bestScore) === 'ratio'))).toBeUndefined()
+    expect(starRound(rounds)).toBeUndefined()
+  })
+
+  it('deriveChampion ties keep the earliest round regardless of input order', () => {
+    const tiedNewestFirst = [
+      { roundId: 'r0009', bestScore: 2.636 },
+      { roundId: 'r0005', bestScore: 2.636 },
+    ]
+    expect(deriveChampion(tiedNewestFirst)?.roundId).toBe('r0005')
+    expect(deriveChampion([...tiedNewestFirst].reverse())?.roundId).toBe('r0005')
   })
 })

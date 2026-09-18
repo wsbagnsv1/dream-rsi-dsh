@@ -63,6 +63,28 @@ export function eraOf(bestScore: number | undefined): Era | undefined {
   return bestScore > SCORE_ERA_THRESHOLD ? 'raw' : 'ratio'
 }
 
+/** The locale-independent glyph marking the best ratio-scale result. */
+export const STAR_GLYPH = '★'
+
+/**
+ * The starred round: the highest score among VALID ratio-scale rounds (the
+ * same era classification as the chart's default), ties keeping the FIRST
+ * round to reach it (chronological order, strict >). Locale-independent —
+ * the glyph renders the same in every language.
+ * @param rounds - the round rows, in any order.
+ * @returns the round id to star, or undefined when no ratio-scale round carries a score.
+ */
+export function starRound(rounds: readonly { roundId: string; bestScore?: number | undefined }[]): string | undefined {
+  const chronological = [...rounds].sort((left, right) => left.roundId < right.roundId ? -1 : left.roundId > right.roundId ? 1 : 0)
+  let best: { roundId: string; score: number } | undefined
+  for (const round of chronological) {
+    if (eraOf(round.bestScore) !== 'ratio') continue
+    const score = round.bestScore ?? 0
+    if (best === undefined || score > best.score) best = { roundId: round.roundId, score }
+  }
+  return best?.roundId
+}
+
 /** A round's nodes as the face read them (one loadNodes outcome). */
 export interface RoundNodes {
   roundId: string

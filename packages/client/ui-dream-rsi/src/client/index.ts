@@ -29,8 +29,8 @@ export type { ForestBand, ForestLayout, ForestOptions, ForestRound } from './for
 export { layoutForest } from './forest-layout.ts'
 export type { Era, EraFilter, IterationPoint, PolicyMarker, Progression, RoundNodes } from './progression.ts'
 export {
-  computeProgression, eraOf, roundColor, thinIndices, toIterationNodes,
-  SCORE_ERA_THRESHOLD, X_LABEL_CAP,
+  computeProgression, eraOf, roundColor, starRound, thinIndices, toIterationNodes,
+  SCORE_ERA_THRESHOLD, STAR_GLYPH, X_LABEL_CAP,
 } from './progression.ts'
 export type { ProgressionChartProps } from './ProgressionChart.tsx'
 export type {

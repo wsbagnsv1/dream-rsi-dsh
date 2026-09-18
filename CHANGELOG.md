@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.3 — best-result star + ratio-era champion headline
+
+- **★ marker**: the rounds table stars the best valid ratio-scale round
+  (highest bestScore among ratio-era rounds, ties keeping the first round to
+  reach it — chronological, input-order independent). Locale-independent ★.
+- **Champion card fix** (user-approved follow-up): the card headlines the
+  RATIO-ERA champion (the objective the project is about) with an era chip
+  and the ★ — the raw 588.062 never headlines. The raw-era best appears only
+  as a clearly-tagged secondary line ("legacy probe era (raw scale, not
+  comparable): 588.062 (r0002)"); a store without ratio rounds headlines
+  nothing and tags the raw line.
+- deriveChampion is now tie-stable chronologically regardless of input order
+  (the star and the headline can never disagree).
+- Tests: +7 in era.spec (star semantics incl. ties/raw-exclusion/empty, the
+  card's ratio-only headline derivation, tie stability). Package suite: 84.
+
 ## 0.4.2 — objective-era awareness
 
 - **User report fix**: the Best-score column mixed incompatible objective

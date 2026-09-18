@@ -373,13 +373,17 @@ export interface Champion {
 
 /**
  * Derive the champion: the highest bestScore across rounds (ties keep the
- * earliest round). Only scored rounds count.
+ * earliest round — the first to reach the score, independent of the input
+ * order). Only scored rounds count.
  * @param rounds - the parsed round rows.
  * @returns the champion, or undefined when no round carries a score.
  */
 export function deriveChampion(rounds: readonly RoundRow[]): Champion | undefined {
+  // Chronological walk, whatever order the caller carries (the dashboard is
+  // newest-first): strict > then keeps the first round to reach the max.
+  const chronological = [...rounds].sort((left, right) => left.roundId < right.roundId ? -1 : left.roundId > right.roundId ? 1 : 0)
   let best: Champion | undefined
-  for (const round of rounds) {
+  for (const round of chronological) {
     if (typeof round.bestScore !== 'number' || Number.isNaN(round.bestScore)) continue
     if (best === undefined || round.bestScore > best.score) {
       best = { score: round.bestScore, roundId: round.roundId, policyVersion: round.policyVersion }

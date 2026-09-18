@@ -4,14 +4,22 @@
 #
 #Usage:
 #   pnpm install              # once, in this repo root
-#   pnpm build                # produce dist/index.js
+#   pnpm build                # produce dist/index.js + the web UI bundle
 #   powershell -File install.ps1              # default: copy-install
 #   powershell -File install.ps1 -PrintOverlay # print a roots overlay instead
+#   powershell -File install.ps1 -WithWebUI    # also mount the web UI panel
+#
+#-WithWebUI links packages/client/ui-dream-rsi into the web profile's
+#node_modules and inserts its row into the profile's cordis.patch.yml, so the
+#browser boots the Dream-RSI sidebar panel (the preset row alone mounts only
+#the package's host half; preset subtrees never reach the browser boot graph).
 param(
     # Where presets live. Defaults to $env:DSH_HOME\.agent-presets, else ~/.dsh/.agent-presets.
     [string]$DshHome,
     # Print the agent-presets roots overlay instead of copying the preset.
-    [switch]$PrintOverlay
+    [switch]$PrintOverlay,
+    # Also mount the web UI panel into the web profile (link + patch insert).
+    [switch]$WithWebUI
 )
 
 $ErrorActionPreference = 'Stop'
@@ -50,8 +58,9 @@ if ($PrintOverlay) {
     Write-Host "          - path: '$((Join-Path $repoRoot 'preset').Replace('\', '/'))'"
     Write-Host "            trust: system"
     Write-Host ''
-    Write-Host "In roots mode no copy is made; the preset row resolves '../dist/index.js' relative to"
-    Write-Host "this repo's preset/ directory, so keep dist/ built."
+    Write-Host "In roots mode no copy is made; the preset rows resolve '../../dist/index.js' and"
+    Write-Host "'../../packages/client/ui-dream-rsi/lib/index.js' relative to this repo's preset/"
+    Write-Host "directory, so keep both built (pnpm build)."
     exit 0
 }
 
@@ -65,16 +74,28 @@ Copy-Item (Join-Path $repoRoot 'preset/dream-rsi') $presetTarget -Recurse -Force
 
 $composition = Join-Path $presetTarget 'agent.cordis.yml'
 $content = Get-Content $composition -Raw
-# The shipped row is relative to the preset dir ('../../dist/index.js'); a copy
-# has no dist beside it, so rewrite to the absolute entry path.
+# The shipped rows are relative to the preset dir; a copy has no dist/ or
+# packages/ beside it, so rewrite both to absolute paths.
+$webuiEntry = Join-Path $repoRoot 'packages/client/ui-dream-rsi/lib/index.js'
+$webuiAbsolute = (Resolve-Path $webuiEntry).Path.Replace('\', '/')
 $content = $content -replace [regex]::Escape("'../../dist/index.js'"), ("'$entryAbsolute'")
+$content = $content -replace [regex]::Escape("'../../packages/client/ui-dream-rsi/lib/index.js'"), ("'$webuiAbsolute'")
 Set-Content $composition $content -NoNewline
 
 Write-Host ''
 Write-Host "Installed: $presetTarget"
 Write-Host "  entry:    $entryAbsolute"
+Write-Host "  webui:    $webuiAbsolute (host half; see -WithWebUI for the browser half)"
+
+if ($WithWebUI) {
+    & "$PSScriptRoot\install-webui.ps1" -DshHome $DshHome
+}
+
 Write-Host ''
 Write-Host 'Next: (re)start DSH Web, open the new-session preset picker, choose "Dream-RSI".'
 Write-Host 'Only sessions started on that preset get the seven dreamrsi_* tools; the baseline stays clean.'
-Write-Host 'Note: the entry path is absolute - re-run this installer if you move this repository,'
+if (-not $WithWebUI) {
+    Write-Host 'The sidebar panel needs the browser half mounted too: re-run with -WithWebUI.'
+}
+Write-Host 'Note: the entry paths are absolute - re-run this installer if you move this repository,'
 Write-Host 'and re-run it after pulling plugin code changes (preset copies are snapshots).'

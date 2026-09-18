@@ -1,0 +1,42 @@
+{
+  "name": "@dreamrsi/dsh-client-ui-dream-rsi",
+  "description": "Dream-RSI campaign dashboard tab type for the right Sidebar: champion card, policy lineage, rounds table, and dream reports, read live from the workspace .dreamrsi/ store over the workspaceFiles Remote namespace",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./src/client/index.ts",
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-api-workspace-files",
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-client-ui-session",
+        "@deepseek-ai/dsh-api-remotes"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "node build.mjs",
+    "test": "vitest run"
+  },
+  "private": true,
+  "devDependencies": {
+    "@types/react": "~18.3.31",
+    "react": "^18.2.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4"
+  }
+}

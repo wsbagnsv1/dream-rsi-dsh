@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.0 — web UI campaign dashboard
+
+- **Dream-RSI sidebar panel** (`packages/client/ui-dream-rsi/`, new client
+  plugin package): a right-Sidebar page type — the same class of surface as
+  the workspace file tree — rendering the live state of the workspace's
+  `.dreamrsi/` store READ-ONLY through the workspace-files pipe: champion
+  card, policy lineage (`v0001 → vNNNN`), rounds table, dream reports with
+  valid-world counts, events tail, on-demand refresh, and a graceful empty
+  state when no store exists yet.
+- Two-plane mounting: the preset's `ui-dream-rsi` row mounts the package's
+  host half (self-describing preset); the browser half is served once the
+  package is also mounted in the host composition (`install.ps1 -WithWebUI`
+  links the package into the web profile and inserts the patch row).
+- Standalone build: esbuild produces the browser bundle in the DSH
+  client-module closure-factory format; the package typechecks and tests
+  standalone (ambient mirrors + a faithful store stub; 20 package tests).
+- Preset composition gained a second validated row + 4 new preset fences
+  (row resolution, manifest, bundle format, two-stage registration); suite:
+  166 root tests + 20 package tests green.
+
 ## 0.2.0 — paper-faithful core
 
 - **Code policies** (`OptimalPolicy` as Python): policies are executable

@@ -36,6 +36,11 @@ export interface IterationPoint {
   floored: boolean
   /** The round's objective era (undefined when the round carries no score to classify). */
   era?: Era | undefined
+  /**
+   * Whether this attempt ATTAINED the champion title (a valid attempt that
+   * raised the running best — the emphasized lineage on the chart).
+   */
+  champion?: boolean | undefined
 }
 
 /**
@@ -126,6 +131,8 @@ export interface Progression {
   max: number
   /** How many distinct rounds the points span. */
   rounds: number
+  /** The iteration index of the FINAL champion (the last attainer); absent with no valid attempt. */
+  finalChampionIndex?: number | undefined
 }
 
 /**
@@ -216,12 +223,19 @@ export function computeProgression(iterations: readonly IterationPoint[], option
   // Pareto frontier over VALID attempts only (user amendment): failed,
   // invalid, and unevaluated attempts stay visible as subpoints but never
   // shape the line. Undefined until the first valid attempt lands.
+  // CHAMPION CHAIN: a valid attempt that RAISES the running best attains the
+  // champion title (the first valid attempt attains it too). Those nodes are
+  // the emphasized lineage; the last one is the final champion (★).
   const runningBest: (number | undefined)[] = []
+  const championFlags: boolean[] = []
   let best = Number.NEGATIVE_INFINITY
   for (const point of points) {
+    let attains = false
     if (point.valid && typeof point.score === 'number' && !Number.isNaN(point.score)) {
+      attains = point.score > best
       best = Math.max(best, point.score)
     }
+    championFlags.push(attains)
     runningBest.push(best === Number.NEGATIVE_INFINITY ? undefined : best)
   }
 
@@ -230,7 +244,17 @@ export function computeProgression(iterations: readonly IterationPoint[], option
   const min = plottable.length > 0 ? Math.min(...plottable) : 0
   const max = plottable.length > 0 ? Math.max(...plottable) : 1
   const rounds = new Set(points.map(point => point.roundId)).size
-  return { points, runningBest, markers, min, max, rounds }
+  const finalChampionIndex = championFlags.lastIndexOf(true)
+  const pointsOut = points.map((point, index) => ({ ...point, ...(championFlags[index] ? { champion: true } : {}) }))
+  return {
+    points: pointsOut,
+    runningBest,
+    markers,
+    min,
+    max,
+    rounds,
+    ...(finalChampionIndex >= 0 ? { finalChampionIndex } : {}),
+  }
 }
 
 /**

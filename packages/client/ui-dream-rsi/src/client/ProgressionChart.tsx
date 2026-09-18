@@ -12,11 +12,13 @@
  * changed. Pure SVG over the precomputed progression model
  * (progression.ts) — no dependencies, no timers, no randomness.
  */
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import { roundColor, thinIndices, X_LABEL_CAP } from './progression.ts'
+import { roundColor, thinIndices, X_LABEL_CAP, STAR_GLYPH } from './progression.ts'
 import type { IterationPoint, Progression } from './progression.ts'
+import { ChartTooltip } from './ChartTooltip.tsx'
+import type { ChartTooltipLine } from './ChartTooltip.tsx'
 import type {} from './locales.ts'
 
 /** The chart's props: the precomputed model and copy. */
@@ -25,6 +27,27 @@ export interface ProgressionChartProps {
   progression: Progression
   /** Namespace-bound translate. */
   t: TranslateNS<'dreamRsi'>
+}
+
+/**
+ * The tooltip model of one subpoint (pure; the styled tooltip renders it).
+ * The score keeps FULL precision — the chart's tick text rounds, this does not.
+ * @param point - the hovered subpoint.
+ * @param championHere - the "champion at this iteration" line, when the point attains.
+ * @returns the ordered tooltip lines.
+ */
+export function tooltipLinesOf(point: IterationPoint, championHere?: string | undefined): ChartTooltipLine[] {
+  const score = point.floored ? '−∞' : String(point.score)
+  const status = point.evaluated
+    ? point.valid ? 'valid' : `failed${point.failClass === undefined ? '' : ` (${point.failClass})`}`
+    : 'unscored'
+  return [
+    { text: `${point.roundId} · ${point.nodeId}`, strong: true },
+    ...(point.mechanism !== undefined ? [{ text: point.mechanism }] : []),
+    { text: `score: ${score}` },
+    { text: status, muted: true },
+    ...(point.champion === true && championHere !== undefined ? [{ text: championHere, muted: true }] : []),
+  ]
 }
 
 /** Chart geometry in viewBox units; the svg scales to the pane width. */
@@ -70,6 +93,13 @@ function tickText(value: number): string {
 export function ProgressionChart({ progression, t }: ProgressionChartProps): ReactNode {
   const { points, runningBest, markers, min, max } = progression
   const iterations = points.length
+  // The hovered subpoint (the styled tooltip's anchor); undefined = hidden.
+  const [hover, setHover] = useState<IterationPoint | undefined>(undefined)
+  const hoverLines = useMemo(
+    () => (hover === undefined ? undefined : tooltipLinesOf(hover, t('progress.championHere'))),
+    [hover, t],
+  )
+  const hovered = hover === undefined ? undefined : points.find(point => point.nodeId === hover.nodeId && point.roundId === hover.roundId)
 
   const yMin = min - (max - min) * Y_PADDING
   const yMax = max + (max - min) * Y_PADDING
@@ -132,21 +162,9 @@ export function ProgressionChart({ progression, t }: ProgressionChartProps): Rea
 
   if (points.length === 0) return null
 
-  const tooltipOf = (point: IterationPoint): string => {
-    const scoreText = point.floored ? '−∞' : tickText(point.score)
-    const lines = [
-      `${point.roundId} · ${point.nodeId}`,
-      point.mechanism,
-      `${t('rounds.best')}: ${scoreText}`,
-      point.evaluated
-        ? point.valid ? t('progress.valid') : `${t('progress.failed')}${point.failClass === undefined ? '' : ` (${point.failClass})`}`
-        : t('tree.unscored'),
-    ]
-    return lines.filter(line => line !== undefined).join('\n')
-  }
-
   return (
     <div data-dream-rsi='progression' data-dream-rsi-points={String(iterations)}>
+      <div style={{ position: 'relative' }}>
       <svg
         style={css.svg}
         viewBox={`0 0 ${String(WIDTH)} ${String(HEIGHT)}`}
@@ -193,7 +211,8 @@ export function ProgressionChart({ progression, t }: ProgressionChartProps): Rea
             </g>
           )
         })}
-        {/* subpoints: valid solid, failed/invalid/unevaluated hollow; colored by round */}
+        {/* subpoints: valid solid, failed/invalid/unevaluated hollow; colored by round.
+            EVERY subpoint carries the styled hover (the tooltip follows the point). */}
         {points.map((point) => {
           const x = scaleX(point.iteration)
           const clamped = point.floored ? Math.max(yMin, point.score) : point.score
@@ -207,19 +226,62 @@ export function ProgressionChart({ progression, t }: ProgressionChartProps): Rea
               fill={solid ? hue : 'transparent'}
               stroke={hue}
               strokeWidth={solid ? 0 : 1.2}
-              opacity={point.evaluated ? 1 : 0.55}
+              opacity={point.champion === true ? 1 : point.evaluated ? 0.9 : 0.55}
+              onMouseEnter={() => { setHover(point) }}
+              onMouseLeave={() => { setHover(undefined) }}
               data-dream-rsi-point={point.nodeId}
               data-dream-rsi-round={point.roundId}
               data-dream-rsi-score={String(point.score)}
               data-dream-rsi-valid={String(point.valid)}
-            >
-              <title>{tooltipOf(point)}</title>
-            </circle>
+              data-dream-rsi-champion={point.champion === true || undefined}
+            />
+          )
+        })}
+        {/* the champion lineage: accent ring + larger marker on every attainer */}
+        {points.filter(point => point.champion === true).map((point) => {
+          const x = scaleX(point.iteration)
+          const clamped = point.floored ? Math.max(yMin, point.score) : point.score
+          const y = scaleY(clamped)
+          return (
+            <circle
+              key={`champion-${point.nodeId}`}
+              cx={x} cy={y} r={6}
+              fill='transparent'
+              stroke={PARETO_COLOR}
+              strokeWidth={2}
+              pointerEvents='none'
+              data-dream-rsi-champion-ring={point.nodeId}
+            />
           )
         })}
         {/* Pareto frontier on top */}
-        <path d={paretoPath} fill='none' stroke={PARETO_COLOR} strokeWidth={2.5} strokeLinejoin='round' />
+        <path d={paretoPath} fill='none' stroke={PARETO_COLOR} strokeWidth={2.5} strokeLinejoin='round' pointerEvents='none' />
+        {/* the final champion's ★ (same glyph as the graphs) */}
+        {(() => {
+          if (progression.finalChampionIndex === undefined) return null
+          const point = points[progression.finalChampionIndex]
+          if (point === undefined) return null
+          const clamped = point.floored ? Math.max(yMin, point.score) : point.score
+          return (
+            <text
+              x={scaleX(point.iteration)} y={scaleY(clamped) - 10}
+              textAnchor='middle' fontSize={12} fill={PARETO_COLOR}
+              pointerEvents='none'
+              data-dream-rsi-progression-star=''
+              data-dream-rsi-node={point.nodeId}
+            >
+              {STAR_GLYPH}
+            </text>
+          )
+        })()}
       </svg>
+      <ChartTooltip
+        x={hovered === undefined ? 0 : scaleX(hovered.iteration)}
+        y={hovered === undefined ? 0 : scaleY(hovered.floored ? Math.max(yMin, hovered.score) : hovered.score)}
+        width={WIDTH}
+        height={HEIGHT}
+        lines={hovered === undefined ? undefined : hoverLines}
+      />
       <div style={css.legend}>
         <span style={css.legendItem}>
           <span style={css.legendLine} />{t('progress.pareto')}
@@ -230,6 +292,12 @@ export function ProgressionChart({ progression, t }: ProgressionChartProps): Rea
         <span style={css.legendItem}>
           <span style={css.legendHollow} />{t('progress.failed')}
         </span>
+        {points.some(point => point.champion === true) && (
+          <span style={css.legendItem}>
+            <span style={{ ...css.legendDot, background: 'transparent', border: `2px solid ${PARETO_COLOR}`, width: 10, height: 10 }} />
+            {t('progress.championLineage')}
+          </span>
+        )}
         {markers.length > 0 && (
           <span style={css.legendItem}>
             <span style={css.legendDash} />{t('progress.markers')}
@@ -241,6 +309,7 @@ export function ProgressionChart({ progression, t }: ProgressionChartProps): Rea
           {`${String(iterations)} ${t('progress.attempts')} · ${points[0]?.roundId ?? ''} → ${points[points.length - 1]?.roundId ?? ''}`}
         </div>
       )}
+      </div>
     </div>
   )
 }

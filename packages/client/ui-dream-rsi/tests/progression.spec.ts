@@ -125,6 +125,60 @@ describe('computeProgression', () => {
     }
   })
 
+  it('marks the champion chain: every valid attainer of a new running best', () => {
+    const { iterations } = toIterationNodes(fixtureRounds())
+    const progression = computeProgression(iterations)
+    // Attainers: the first valid (0.9598), the 1.8, and the 2.6359 — NOT the
+    // failed nodes, NOT valid attempts that merely tie or sit below the best.
+    expect(progression.points.map(point => point.champion === true)).toEqual([
+      false, true, false, false, true, false, true,
+    ])
+    // The FINAL champion carries the ★: the last attainer.
+    expect(progression.finalChampionIndex).toBe(6)
+    expect(progression.points[6]?.nodeId).toBe('r0002-n003')
+  })
+
+  it('the ratio-only default keeps the raw-probe 588 out of the y domain', () => {
+    // The live-store mix: r0002 is the raw toy-task round (588.062).
+    const mixed = toIterationNodes([
+      {
+        roundId: 'r0002', truncated: false, era: 'raw',
+        nodes: [
+          { id: 'r0002-n000', parentId: null, score: 0, evaluated: false, valid: false },
+          { id: 'r0002-n001', parentId: 'r0002-n000', score: 588.062, evaluated: true, valid: true },
+        ],
+      },
+      {
+        roundId: 'r0005', truncated: false, era: 'ratio',
+        nodes: [
+          { id: 'r0005-n000', parentId: null, score: 0, evaluated: false, valid: false },
+          { id: 'r0005-n001', parentId: 'r0005-n000', score: 2.6359830849, evaluated: true, valid: true },
+        ],
+      },
+    ]).iterations
+    // DEFAULT (the section passes eraFilter 'ratio'): the domain fits the climb.
+    const ratio = computeProgression(mixed, { eraFilter: 'ratio' })
+    expect(ratio.min).toBe(0)
+    expect(ratio.max).toBe(2.6359830849)
+    expect(ratio.points.some(point => point.roundId === 'r0002')).toBe(false)
+    // The champion chain is ratio-only too: the final champion is the ratio round's node.
+    expect(ratio.finalChampionIndex).toBe(1)
+    // Toggling legacy in rescales the domain (the user sees the stretch).
+    const all = computeProgression(mixed, { eraFilter: 'all' })
+    expect(all.max).toBe(588.062)
+    expect(all.finalChampionIndex).toBe(1) // the raw attempt attains over everything
+  })
+
+  it('a window restarts the champion chain (the within-window attainers)', () => {
+    const { iterations } = toIterationNodes(fixtureRounds())
+    // No era filter: the fixture carries no era; the window restarts the chain.
+    // slice(4) = [1.8 valid, floored invalid, 2.636 valid]: the first valid
+    // attempt attains afresh, the invalid one doesn't, the 2.636 raises again.
+    const windowed = computeProgression(iterations.slice(4))
+    expect(windowed.points.map(point => point.champion === true)).toEqual([true, false, true])
+    expect(windowed.finalChampionIndex).toBe(2)
+  })
+
   it('a failed attempt between two valid ones does NOT drop the frontier', () => {
     const { iterations } = toIterationNodes(fixtureRounds())
     const progression = computeProgression(iterations)

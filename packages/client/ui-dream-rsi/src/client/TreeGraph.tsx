@@ -11,9 +11,12 @@ import { useMemo } from 'react'
 import type { ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { bestPath, FLOORED_SCORE } from './read.ts'
+import { useState } from 'react'
 import type { NodeRow } from './read.ts'
 import { layoutTree, scoreColor } from './tree-layout.ts'
 import { STAR_GLYPH } from './progression.ts'
+import { ChartTooltip } from './ChartTooltip.tsx'
+import type { ChartTooltipLine } from './ChartTooltip.tsx'
 import type {} from './locales.ts'
 
 /** The graph's props: one round's rows, its id, copy, and the toggle state. */
@@ -76,6 +79,8 @@ function scoreText(score: number | undefined): string {
  */
 export function TreeGraph({ nodes, roundId, showBestPath, era, t }: TreeGraphProps): ReactNode {
   const layout = useMemo(() => layoutTree(nodes), [nodes])
+  // The hovered node (the styled tooltip's anchor); undefined = hidden.
+  const [hover, setHover] = useState<NodeRow | undefined>(undefined)
   // The best path (and its terminal's star) exists whenever the round has a
   // scored chain — independent of the emphasis toggle.
   const path = useMemo(() => bestPath(nodes), [nodes])
@@ -101,20 +106,25 @@ export function TreeGraph({ nodes, roundId, showBestPath, era, t }: TreeGraphPro
 
   if (layout.positions.size === 0) return null
 
-  const tooltipOf = (node: NodeRow): string => {
-    const lines = [
-      node.id,
-      node.mechanism === undefined ? undefined : `${node.mechanism}`,
-      node.summary,
-      `${t('rounds.best')}: ${scoreText(node.score)}${node.valid === false ? ` · ${node.failClass ?? t('dreams.floored')}` : ''}`,
-      node.notes === undefined ? undefined : node.notes.length > 160 ? `${node.notes.slice(0, 160)}…` : node.notes,
+  /** The styled tooltip's lines for one node (full-precision score). */
+  const tooltipLinesOf = (node: NodeRow): ChartTooltipLine[] => {
+    const floored = typeof node.score === 'number' && node.score <= FLOORED_SCORE / 2
+    const score = floored ? '−∞' : node.score === undefined ? '—' : String(node.score)
+    return [
+      { text: `${roundId} · ${node.id}`, strong: true },
+      ...(node.mechanism === undefined ? [] : [{ text: node.mechanism }]),
+      ...(node.summary === undefined ? [] : [{ text: node.summary, muted: true }]),
+      { text: `${t('rounds.best')}: ${score}${node.valid === false ? ` · ${node.failClass ?? t('dreams.floored')}` : ''}` },
+      ...(node.notes === undefined ? [] : [{ text: node.notes.length > 160 ? `${node.notes.slice(0, 160)}…` : node.notes, muted: true }]),
     ]
-    return lines.filter(line => line !== undefined).join('\n')
   }
 
   return (
     <div data-dream-rsi='tree-graph' data-dream-rsi-round={roundId}>
       <div style={css.graphScroll}>
+        {/* The relative wrapper hugs the svg (its exact size), so the tooltip's
+            percentage anchor tracks the node at any scroll position. */}
+        <div style={{ position: 'relative', width: layout.width, height: layout.height }}>
         <svg
           style={css.svg}
           width={layout.width}
@@ -157,11 +167,11 @@ export function TreeGraph({ nodes, roundId, showBestPath, era, t }: TreeGraphPro
                   ? INVALID_STROKE
                   : highlighted ? BEST_NODE_STROKE : 'transparent'}
                 strokeWidth={highlighted || (node.evaluated === true && node.valid === false) ? 2 : 0}
+                onMouseEnter={() => { setHover(node) }}
+                onMouseLeave={() => { setHover(undefined) }}
                 data-dream-rsi-node={id}
                 data-dream-rsi-score={node.score === undefined ? '' : String(node.score)}
-              >
-                <title>{tooltipOf(node)}</title>
-              </circle>
+              />
             )
           })}
           {/* the round's champion node ★ (ratio-era rounds only) */}
@@ -181,6 +191,14 @@ export function TreeGraph({ nodes, roundId, showBestPath, era, t }: TreeGraphPro
             )
           })()}
         </svg>
+        <ChartTooltip
+          x={hover === undefined ? 0 : layout.positions.get(hover.id)?.x ?? 0}
+          y={hover === undefined ? 0 : layout.positions.get(hover.id)?.y ?? 0}
+          width={Math.max(layout.width, 1)}
+          height={Math.max(layout.height, 1)}
+          lines={hover === undefined ? undefined : tooltipLinesOf(hover)}
+        />
+        </div>
       </div>
       <div style={css.legend}>
         <span style={css.legendChip}>

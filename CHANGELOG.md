@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.5 — champion-run emphasis + styled hover tooltips
+
+- **Champion run on the iteration chart** (user report: the raw-probe y-domain
+  squashed the climb): the chart already defaulted to the ratio-era (W7) —
+  now the promoted chain is VISIBLE: every valid attempt that attained the
+  running best draws an accent ring + full opacity ("champion lineage",
+  legend entry), the FINAL champion carries the ★ (same glyph as the
+  graphs), and the emphasized hover reads "champion at this iteration".
+- **Styled hover tooltips** (user addendum): the native `<title>` (~1 s
+  delay) is replaced on the iteration chart and the focused tree graph by an
+  immediate positioned HTML tooltip (dark box, follows the point, clamped
+  inside the pane — flips below near the top edge, anchors pull inward at
+  the sides). EVERY subpoint hovers: roundId, node id, mechanism, score at
+  FULL precision, valid/failClass, plus the champion line on lineage nodes.
+  The forest graph keeps native titles (≈100+ nodes; noted).
+- Tests: +8 (champion chain attainers + final champion, the ratio-only
+  domain excluding raw probes, window restart, the tooltip model for every
+  subpoint kind). Package suite: 102.
+
 ## 0.4.4 — graph star + plotted-range window
 
 - **★ on the graphs**: the best-path highlight's terminal node — the

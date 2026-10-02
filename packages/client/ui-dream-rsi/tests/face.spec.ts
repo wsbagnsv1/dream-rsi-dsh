@@ -7,8 +7,22 @@
 import { describe, expect, it } from 'vitest'
 import { load } from '../src/client/face.ts'
 import type { WorkspaceFilesRemote } from '../src/client/face.ts'
-import type { RemoteResult } from '@deepseek-ai/dsh-api-remotes/client'
-import type { WorkspaceDirectoryListing, WorkspaceFileText } from '@deepseek-ai/dsh-api-workspace-files/types'
+import type { RemoteErrorDetailsMap, RemoteFailure, RemoteResult } from '@deepseek-ai/dsh-api-remotes/client'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { WorkspaceDirectoryListing, WorkspaceFileRange, WorkspaceFileText } from '@deepseek-ai/dsh-api-workspace-files/types'
+
+/**
+ * A scripted Remote failure. The host's failure members are RemoteError class
+ * instances carrying `name`/`isDSHRemoteError`; a fixture supplies only the
+ * code/message/details the face reads, so the shape is asserted once here.
+ */
+function fixtureFailure<T extends RemoteFailure['code']>(
+  code: T,
+  message: string,
+  details: RemoteErrorDetailsMap[T],
+): RemoteFailure {
+  return { code, message, details } as unknown as RemoteFailure
+}
 
 /** Round count past the old cap of 12 — the fence's whole point. */
 const ROUND_COUNT = 30
@@ -49,7 +63,7 @@ function scriptedRemote(files: Map<string, string>): WorkspaceFilesRemote {
   const read = (path: string, range: { offset?: number | undefined; limit?: number | undefined }): RemoteResult<WorkspaceFileText> => {
     const text = files.get(path)
     if (text === undefined) {
-      return { ok: false, error: { code: 'workspace-file/not-found', message: `no ${path}` } }
+      return { ok: false, error: fixtureFailure('workspace-file/not-found', `no ${path}`, { path }) }
     }
     const lines = text.split('\n')
     const offset = range.offset ?? 1
@@ -65,10 +79,12 @@ function scriptedRemote(files: Map<string, string>): WorkspaceFilesRemote {
   }
   return {
     workspaceFiles: {
-      read: async (_sessionId, path, range) => read(path, range),
-      list: async (_sessionId, path) => list(path),
+      read: async (_sessionId: SessionId, path: string, range: WorkspaceFileRange) => read(path, range),
+      list: async (_sessionId: SessionId, path: string) => list(path),
     },
-  }
+    // The face calls only `list` and `read`; the real generated namespace also
+    // carries stat/readBytes/changes, so the scripted subset is asserted once.
+  } as unknown as WorkspaceFilesRemote
 }
 
 /** A store with ROUND_COUNT rounds (r0001…r00NN) and a policy index. */
@@ -204,7 +220,7 @@ describe('load() dream reports — paged reads past the line window (W11)', () =
     const failing = remote.workspaceFiles.read
     remote.workspaceFiles.read = async (id, path, range, signal) =>
       path.endsWith('d0002.json')
-        ? { ok: false, error: { code: 'workspace-file/too-large', message: 'lines exceed the byte cap' } }
+        ? { ok: false, error: fixtureFailure('workspace-file/too-large', 'lines exceed the byte cap', { path, limit: 2 * 1024 * 1024 }) }
         : failing(id, path, range, signal)
     const outcome = await load(remote, sessionId, new AbortController().signal)
     if (outcome.kind !== 'loaded') throw new Error('expected a loaded dashboard')

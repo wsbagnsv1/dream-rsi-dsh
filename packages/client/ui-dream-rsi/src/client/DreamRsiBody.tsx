@@ -10,7 +10,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { IconRefreshOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconRefreshOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
 import { deriveChampion, FLOORED_SCORE, totalNodes } from './read.ts'
 import type { DreamRow, PolicyRow, RoundRow } from './read.ts'
@@ -544,7 +544,7 @@ export function DreamRsiBody({
           title={t('refresh')}
           data-dream-rsi='refresh'
         >
-          <IconRefreshOutline16 size={13} />
+          <IconRefreshOutlineRegular size={13} />
           {t('refresh')}
         </button>
       </div>

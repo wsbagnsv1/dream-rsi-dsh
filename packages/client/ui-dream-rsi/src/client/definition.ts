@@ -32,6 +32,7 @@ export function dreamRsiDefinition(t: TranslateNS<'dreamRsi'>): SidebarRightTabD
     priority: 'extension',
     title: () => t('type.label'),
     guide: [{
+      id: 'dream-rsi',
       order: GUIDE_ORDER,
       title: () => t('guide.title'),
       description: () => t('guide.description'),

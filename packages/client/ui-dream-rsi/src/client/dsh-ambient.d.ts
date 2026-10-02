@@ -26,7 +26,7 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
   }
 
   /** The refresh glyph the panel's header button draws. */
-  export const IconRefreshOutline16: ComponentType<IconProps>
+  export const IconRefreshOutlineRegular: ComponentType<IconProps>
 }
 
 // ── the client store engine (value import) ──────────────────────────────────
@@ -205,6 +205,15 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     : object
 }
 
+// ── host client entries whose only contribution here is a service augmentation ──
+// Importing these entries is what pulls `ctx.slots` (ui-renderer) and
+// `ctx.locale` (locale runtime) into a program; both services are already
+// mirrored on the Cordis Context above, so the specifiers only need to resolve.
+
+declare module '@deepseek-ai/dsh-client-ui-renderer/client' {}
+
+declare module '@deepseek-ai/dsh-client-locale/client' {}
+
 // ── sidebar-right: the tab registry this package contributes a page type to ──
 
 declare module '@deepseek-ai/dsh-client-ui-sidebar-right/client' {
@@ -212,6 +221,7 @@ declare module '@deepseek-ai/dsh-client-ui-sidebar-right/client' {
 
   /** One entry capsule the guide page offers. */
   export interface SidebarRightGuideEntry {
+    readonly id: string
     readonly order: number
     readonly title: () => string
     readonly description?: () => string
@@ -273,6 +283,11 @@ declare module '@deepseek-ai/dsh-api-workspace-files/types' {
 // ── remotes: the transport result and the Remote face ───────────────────────
 
 declare module '@deepseek-ai/dsh-api-remotes/client' {
+  /** Per-code failure payloads; the host types each code's own fields. */
+  export interface RemoteErrorDetailsMap {
+    readonly [code: string]: Record<string, unknown>
+  }
+
   /** One settled remote failure. */
   export interface RemoteFailure {
     readonly code: string

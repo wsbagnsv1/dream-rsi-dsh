@@ -1,0 +1,58 @@
+{
+  // Verifies this package against the DSH checkout actually installed on this
+  // machine, by mapping every `@deepseek-ai/*` specifier to that checkout's
+  // built declarations (`lib/types`). The default `typecheck` stays portable:
+  // it resolves nothing host-side, so it cannot see host API drift at all.
+  //
+  // Run after every DSH upgrade:  pnpm typecheck:host
+  // The paths are absolute on purpose — they name a host installation, not a
+  // portable dependency. Re-point them when DSH moves.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@deepseek-ai/cordis": [
+        "F:/Users/timbe/Desktop/deepseek/deepseek-harness/vendor/cordis/lib/types/index.d.ts"
+      ],
+      "@deepseek-ai/dsh-client-store": [
+        "F:/Users/timbe/Desktop/deepseek/deepseek-harness/packages/client/store/lib/types/index.d.ts"
+      ],
+      "@deepseek-ai/dsh-client-ui-primitives": [
+        "F:/Users/timbe/Desktop/deepseek/deepseek-harness/packages/client/ui-primitives/lib/types/index.d.ts"
+      ],
+      "@deepseek-ai/dsh-client-ui-slots": [
+        "F:/Users/timbe/Desktop/deepseek/deepseek-harness/packages/client/ui-slots/lib/types/index.d.ts"
+      ],
+      "@deepseek-ai/dsh-client-ui-dockkit": [
+        "F:/Users/timbe/Desktop/deepseek/deepseek-harness/packages/client/ui-dockkit/lib/types/index.d.ts"
+      ],
+      "@deepseek-ai/dsh-client-ui-sidebar-right/client": [
+        "F:/Users/timbe/Desktop/deepseek/deepseek-harness/packages/client/ui-sidebar-right/lib/types/client/index.d.ts"
+      ],
+      "@deepseek-ai/dsh-client-ui-renderer/client": [
+        "F:/Users/timbe/Desktop/deepseek/deepseek-harness/packages/client/ui-renderer/lib/types/client/index.d.ts"
+      ],
+      "@deepseek-ai/dsh-client-locale/client": [
+        "F:/Users/timbe/Desktop/deepseek/deepseek-harness/packages/client/locale/lib/types/client/index.d.ts"
+      ],
+      "@deepseek-ai/dsh-api-remotes/client": [
+        "F:/Users/timbe/Desktop/deepseek/deepseek-harness/packages/api/remotes/lib/types/client/index.d.ts"
+      ],
+      "@deepseek-ai/dsh-api-workspace-files/types": [
+        "F:/Users/timbe/Desktop/deepseek/deepseek-harness/packages/api/workspace-files/lib/types/types.d.ts"
+      ],
+      "@deepseek-ai/dsh-session/types": [
+        "F:/Users/timbe/Desktop/deepseek/deepseek-harness/packages/core/session/lib/types/types.d.ts"
+      ],
+      "@deepseek-ai/dsh-typert-protocol": [
+        "F:/Users/timbe/Desktop/deepseek/deepseek-harness/packages/typert/protocol/lib/types/index.d.ts"
+      ]
+    }
+  },
+  "include": ["src", "tests"],
+  // The mirror declares `declare module` blocks for the same specifiers, and an
+  // ambient module declaration SHADOWS real resolution — leaving it in scope
+  // would make this check validate the mirror instead of the host, which is
+  // exactly how a removed icon export reached production.
+  "exclude": ["src/client/dsh-ambient.d.ts"]
+}

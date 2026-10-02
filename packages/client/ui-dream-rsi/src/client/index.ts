@@ -10,6 +10,11 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
+// Service augmentations the apply body reads: `ctx.slots` (renderer) and
+// `ctx.locale` (locale runtime). Type-only: both are provided at runtime by the
+// composed client plugins this package declares in `inject`.
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { DREAM_RSI_ID, dreamRsiDefinition } from './definition.ts'
 import { dreamRsiFace } from './face.ts'
 import { DreamRsiBody } from './DreamRsiBody.tsx'

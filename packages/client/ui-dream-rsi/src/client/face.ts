@@ -148,8 +148,11 @@ async function readPage(
  */
 export function dreamRsiFace(
   remote: WorkspaceFilesRemote,
-): (sessionId: SessionId, actions: FaceActions) => DreamRsiInjected {
-  return (sessionId: SessionId, actions: FaceActions): DreamRsiInjected => {
+): (sessionId: string, actions: FaceActions) => DreamRsiInjected {
+  // The slot framework supplies the session id as a plain string; the Remote
+  // namespace is typed with the branded SessionId, so brand it once here.
+  return (sessionId: string, actions: FaceActions): DreamRsiInjected => {
+    const session = sessionId as SessionId
     /** Per tab: the refresh generation; the latest request wins. */
     const generations = new Map<string, number>()
     const nextGeneration = (tabId: string): number => {
@@ -161,7 +164,7 @@ export function dreamRsiFace(
       if (signal.aborted) return
       const generation = nextGeneration(tabId)
       actions.started(tabId)
-      void load(remote, sessionId, signal).then((outcome) => {
+      void load(remote, session, signal).then((outcome) => {
         if (generations.get(tabId) !== generation) return
         if (outcome.kind === 'loaded') actions.loaded(tabId, outcome.data, Date.now())
         else if (outcome.kind === 'missing') actions.missing(tabId)
